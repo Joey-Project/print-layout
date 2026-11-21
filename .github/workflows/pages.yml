@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write # push the gh-pages branch
+  pages: write # request the Pages build
 
 concurrency:
   group: pages
@@ -55,3 +56,15 @@ jobs:
           git add -A
           git commit -q -m "Publish ${GITHUB_SHA::7}"
           git push -f -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+      - name: Request a Pages build
+        # Pushes made with GITHUB_TOKEN do not start a Pages build by themselves
+        # (https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site#troubleshooting-publishing-from-a-branch),
+        # so ask for one explicitly.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/builds" --silent; then
+            echo "Requested a GitHub Pages build of gh-pages."
+          else
+            echo "::warning::Could not request a Pages build. Enable Pages (Settings → Pages → Deploy from a branch → gh-pages / root), then re-run this workflow."
+          fi

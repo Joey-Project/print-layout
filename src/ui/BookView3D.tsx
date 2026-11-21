@@ -219,7 +219,12 @@ export function BookView3D({
     const ndc = new THREE.Vector2();
     const bookPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
     const onPlane = new THREE.Vector3();
-    let drag: { rank: number } | null = null;
+    /**
+     * The leaf being dragged: how far out from the spine it was grabbed (so it turns at the
+     * pointer's rate) and the offset between where the pointer maps and where the leaf actually was
+     * (so it does not jump when grabbed away from its outer edge, or while lifted).
+     */
+    let drag: { rank: number; reach: number; offset: number } | null = null;
     const aim = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -229,7 +234,7 @@ export function BookView3D({
       const pt = scene.current?.tl.pageTurn;
       return pt && live.current.time >= pt.start - 1e-6 ? pt : null;
     };
-    /** The leaf rank of the front-most panel under the pointer, if any. */
+    /** The leaf of the front-most panel under the pointer, and where it was hit. */
     const leafUnderPointer = (pt: PageTurn) => {
       // Folds (seam strips) are not grabbable; look past them to the first page.
       const hit = raycaster
@@ -237,7 +242,8 @@ export function BookView3D({
         .find((h) => h.object.parent?.userData.panel !== undefined);
       if (!hit) return null;
       const panel = hit.object.parent?.userData.panel as number | undefined;
-      return (panel === undefined ? undefined : pt.rankOf(panel)) ?? null;
+      const rank = panel === undefined ? undefined : pt.rankOf(panel);
+      return rank === undefined ? null : { rank, point: hit.point };
     };
     const overBook = () => raycaster.intersectObject(group, true).length > 0;
     const onDown = (e: PointerEvent) => {
@@ -246,23 +252,29 @@ export function BookView3D({
       aim(e);
       // Grab the leaf actually under the pointer — not whichever leaf is still settling from the
       // last release, which is what made a quick second flip snap back to the previous page.
-      const rank = leafUnderPointer(pt);
-      if (rank === null || !raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
+      const grabbed = leafUnderPointer(pt);
+      if (grabbed === null || !raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
+      const { rank, point } = grabbed;
       if (rank < 0 || rank >= pt.leafCount) return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      drag = { rank };
+      const explode = live.current.explode;
+      const reach = pt.reachAt(rank, point.x, point.y, point.z, explode);
+      const startTime = pt.grab(live.current.time, rank);
+      const offset = pt.progressOf(startTime, rank) - pt.progressAt(onPlane.x, onPlane.y, reach);
+      drag = { rank, reach, offset };
       logEvent('grab', {
         rank,
         time: live.current.time,
         settlingTo: live.current.target,
         pointer: [onPlane.x, onPlane.y],
+        reach,
+        offset,
       });
       setMode('paused');
       live.current.target = null;
-      const t = pt.grab(live.current.time, rank);
-      live.current.time = t;
-      setTime(t);
+      live.current.time = startTime;
+      setTime(startTime);
       canvas.setPointerCapture(e.pointerId);
       canvas.style.cursor = 'grabbing';
     };
@@ -271,7 +283,8 @@ export function BookView3D({
       aim(e);
       if (drag && pt) {
         if (!raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
-        const t = pt.timeFor(drag.rank, pt.progressAt(onPlane.x, onPlane.y));
+        const progress = pt.progressAt(onPlane.x, onPlane.y, drag.reach) + drag.offset;
+        const t = pt.timeFor(drag.rank, Math.min(1, Math.max(0, progress)));
         logEvent('drag', { rank: drag.rank, time: t, pointer: [onPlane.x, onPlane.y] });
         live.current.time = t;
         setTime(t);
@@ -393,6 +406,23 @@ export function BookView3D({
         }
       }
       controls.update();
+      // Keep the whole scene between the clipping planes, however far out the camera is (a long
+      // column of printed sheets can need a camera hundreds of units away).
+      if (s) {
+        box.setFromObject(root.current ?? world);
+        if (!box.isEmpty()) {
+          box.getCenter(center);
+          const far = Math.max(
+            50,
+            (camera.position.distanceTo(center) + box.getSize(size).length() / 2) * 1.5,
+          );
+          if (Math.abs(far - camera.far) > camera.far * 0.05) {
+            camera.far = far;
+            camera.near = Math.max(0.01, far / 20000);
+            camera.updateProjectionMatrix();
+          }
+        }
+      }
       renderer.render(world, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -627,6 +657,9 @@ export function BookView3D({
   const nextStop = () => goTo(stops.find((s) => s > time + 1e-6) ?? duration);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // Leave keys to focused controls (Space toggles a checkbox, arrows move a slider…).
+    const el = e.target as HTMLElement;
+    if (el !== e.currentTarget && el.closest('input, select, textarea, button, a')) return;
     if (e.key === ' ') {
       e.preventDefault();
       setMode(mode === 'paused' ? (time >= duration ? 'backward' : 'forward') : 'paused');
