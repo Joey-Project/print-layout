@@ -1,5 +1,6 @@
 /**
- * The assembly timeline: printed sheets → stacked → folded → gathered → read leaf by leaf.
+ * The assembly timeline: printed sheets → (cut apart and arranged, when several are printed on one
+ * sheet) → stacked → folded → gathered → read leaf by leaf.
  *
  * Every pose is derived from the same fold simulation the imposition engine uses (one facet per
  * panel), so the 3D animation cannot disagree with the 2D plan.
@@ -10,6 +11,7 @@
  */
 import { Matrix4 } from 'three';
 import { applyFold, packetBounds, type Facet } from '../engine/fold';
+import type { GangPlan } from '../engine/gang';
 import type { BindingEdge, FoldStep, Plan, Recipe } from '../engine/types';
 
 export interface PanelRef {
@@ -18,7 +20,7 @@ export interface PanelRef {
   row: number;
 }
 
-export type SegmentKind = 'collate' | 'settle' | 'fold' | 'gather' | 'read';
+export type SegmentKind = 'cut' | 'arrange' | 'collate' | 'settle' | 'fold' | 'gather' | 'read';
 
 export interface Segment {
   kind: SegmentKind;
@@ -201,7 +203,20 @@ function describeFold(f: FoldStep, i: number, n: number): string {
   return `Fold ${i + 1} of ${n}: ${side} ${f.to === 'over' ? 'over the top' : 'underneath'}`;
 }
 
-export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timeline {
+/**
+ * Gap between units on one printed sheet in the 3D view: a hairline while it is one sheet, wider
+ * once cut apart.
+ */
+const UNIT_GAP_PRINTED = 0.03;
+const UNIT_GAP_CUT = 0.4;
+
+export function buildTimeline(
+  recipe: Recipe,
+  plan: Plan,
+  aspect: number,
+  /** Several recipe sheets per printed sheet: start from the printed sheets and cut them apart. */
+  gang: GangPlan | null = null,
+): Timeline {
   const { cols, rows } = recipe.grid;
   const sheetCount = plan.sheets.length;
   const panels: PanelRef[] = [];
@@ -308,6 +323,33 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     t += len;
     return s;
   };
+  // Ganged printing (cut and stack): the printed sheets are cut into their units, which are then
+  // arranged into the recipe's sheet order. (Copies print the same sheet several times; the model
+  // shows one copy.)
+  const ganged = gang !== null && gang.units > 1 && gang.gang.order === 'stack';
+  let cut: Segment | undefined;
+  let arrange: Segment | undefined;
+  if (ganged) {
+    cut = push('cut', `Cut each printed sheet into its ${gang.units} parts`);
+    arrange = push(
+      'arrange',
+      'Stack the piles in order: each part slides into place, sheet 1 first',
+    );
+  }
+  const unitW = cols;
+  const unitH = rows * aspect;
+  const paperStride = ganged
+    ? gang.gang.down * unitH + (gang.gang.down - 1) * UNIT_GAP_CUT + SHEET_SPACING
+    : 0;
+  /** Where a recipe sheet lies on its printed sheet (front view), with units `g` apart. */
+  const printedAt = (sheet: number, g: number) => {
+    const at = gang!.placeOf(sheet);
+    return {
+      x: at.col * (unitW + g),
+      y: -at.paper * paperStride - at.row * (unitH + g),
+    };
+  };
+
   let collate: Segment | undefined;
   let collateSettle: Segment | undefined;
   if (groups.some((g) => g.length > 1)) {
@@ -493,6 +535,25 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
       const m = out[i]!;
       const g = groupOf.get(p.sheet)!;
       const group = groups[g]!;
+
+      // Cutting the printed sheets apart, then arranging the parts into the sheets' column.
+      if (cut && arrange && tt < arrange.end) {
+        if (tt <= cut.end) {
+          const { x, y } = printedAt(
+            p.sheet,
+            lerp(UNIT_GAP_PRINTED, UNIT_GAP_CUT, smooth(tt - cut.start)),
+          );
+          m.makeTranslation(x, y, 0);
+        } else {
+          const from = printedAt(p.sheet, UNIT_GAP_CUT);
+          const u = smooth(tt - arrange.start);
+          // Lift while moving (each sheet to its own height) so the parts never pass through
+          // one another.
+          const lift = Math.sin(Math.PI * u) * (0.3 + 0.08 * (plan.sheets.length - p.sheet));
+          m.makeTranslation(lerp(from.x, 0, u), lerp(from.y, layoutY(p.sheet), u), lift);
+        }
+        return;
+      }
 
       // Stacking: from the printed column into the section's stack, then squared up.
       if (collate && collateSettle && tt < foldStart) {

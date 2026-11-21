@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPlan,
   builtinRecipes,
+  gangPlan,
+  NO_GANG,
   pagesPerSheet,
   ImpositionError,
   recipeProblems,
@@ -123,6 +125,12 @@ export function App() {
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
   const pdfArt = usePdfArt(pdf, plan, imposed);
+  // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
+  const printGang = print.options.gang ?? NO_GANG;
+  const gang = useMemo(
+    () => (plan ? gangPlan(plan.sheets.length, printGang) : null),
+    [plan, printGang.across, printGang.down, printGang.order],
+  );
 
   // ---- Bug reports. ----
   const buildReport = (note: string): { report: DebugReport; screenshot: string | null } => {
@@ -430,6 +438,7 @@ export function App() {
                   art={pdfArt?.art ?? null}
                   artVersion={pdfArt?.version ?? 0}
                   pdfAspect={pdfArt?.aspect ?? null}
+                  gang={gang}
                 />
               )}
             </>

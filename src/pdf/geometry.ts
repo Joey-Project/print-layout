@@ -4,7 +4,16 @@
  * /Rotate and trim box) into a panel. The PDF writer and the imposed-PDF reader only draw what
  * these functions compute.
  */
-import type { Grid, Plan, Rotation, Slot } from '../engine';
+import {
+  gangPlan,
+  NO_GANG,
+  type Gang,
+  type GangPlan,
+  type Grid,
+  type Plan,
+  type Rotation,
+  type Slot,
+} from '../engine';
 
 /** PDF points per millimetre. */
 export const MM = 72 / 25.4;
@@ -70,6 +79,10 @@ export interface PrintOptions {
   flip: 'auto' | 'short' | 'long';
   /** For 'split': print the backs in reverse order (for re-feeding a face-down stack). */
   reverseBacks: boolean;
+  /** Several recipe sheets per printed sheet, cut apart after printing (default: one). */
+  gang?: Gang;
+  /** Extra gap between ganged units for the cut, mm (on top of their bleed). */
+  gutter?: number;
 }
 
 export type PrintPreset = 'home' | 'manual' | 'shop';
@@ -146,6 +159,8 @@ export interface Segment {
 /** One panel on an output sheet side, ready to draw. */
 export interface PlacedSlot {
   slot: Slot;
+  /** The recipe sheet this slot belongs to (several per printed sheet when ganged). */
+  sheet: number;
   /** Panel rectangle on the output page (points, y up). */
   rect: Rect;
   /** Rotation of the page in this panel as printed (includes a rotated back side). */
@@ -161,9 +176,13 @@ export interface SheetLayout {
   orientation: 'portrait' | 'landscape';
   /** Imposition scale (1 = 100 %). */
   scale: number;
-  /** The whole imposition's trim and bleed rectangles. */
+  /** Envelope of all units' trims, and of their bleeds. */
   trim: Rect;
   bleed: Rect;
+  /** Printed sheets and which recipe sheet each unit holds. */
+  gang: GangPlan;
+  /** Each unit's trim rectangle on the front, indexed [row][col] (front view). */
+  units: Rect[][];
   /** Whether back sides are rotated 180° in the PDF (printer turns top ↔ bottom). */
   backRotated: boolean;
   /** Printer setting that matches: flip on the short or long edge. */
@@ -173,12 +192,14 @@ export interface SheetLayout {
   /** Where to put the slug label (baseline start), if enabled. */
   slugAt: { x: number; y: number } | null;
   warnings: string[];
-  /** Panels for each sheet side, in output order is decided by the writer. */
-  place(sheet: number, side: 'front' | 'back'): PlacedSlot[];
+  /** Panels on one side of printed sheet `paper` (all its units). */
+  place(paper: number, side: 'front' | 'back'): PlacedSlot[];
 }
 
 /**
- * Lay the plan out on output sheets. `page` is the finished (trimmed) page size in points.
+ * Lay the plan out on printed sheets. `page` is the finished (trimmed) page size in points. With a
+ * gang, each printed sheet carries `across × down` units (recipe sheets) separated by their bleed
+ * and the gutter; everything stays centred, so every unit's back lands behind its front.
  */
 export function layoutSheets(
   plan: Plan,
@@ -186,9 +207,15 @@ export function layoutSheets(
   o: PrintOptions,
 ): SheetLayout {
   const { cols, rows } = plan.grid;
-  const impW = cols * page.w;
-  const impH = rows * page.h;
+  const gang = gangPlan(plan.sheets.length, o.gang ?? NO_GANG);
+  const { across, down } = gang.gang;
+  const unitW = cols * page.w;
+  const unitH = rows * page.h;
   const bleed = Math.max(0, o.bleed) * MM;
+  // Between units: each unit's own bleed, plus room to cut.
+  const gap = across * down > 1 ? 2 * bleed + Math.max(0, o.gutter ?? 0) * MM : 0;
+  const gangW = (s: number) => across * unitW * s + (across - 1) * gap;
+  const gangH = (s: number) => down * unitH * s + (down - 1) * gap;
   const marks = o.cropMarks || o.foldMarks;
   // Room needed around the trim, beyond which nothing is drawn. It is the same on every side, so
   // the imposition stays centred on the sheet: a back turned top ↔ bottom then lands exactly
@@ -206,8 +233,8 @@ export function layoutSheets(
   let scale: number;
   if (o.sheet.kind === 'fit') {
     scale = 1;
-    width = impW + 2 * reserve;
-    height = impH + 2 * reserve;
+    width = gangW(1) + 2 * reserve;
+    height = gangH(1) + 2 * reserve;
   } else {
     let size: { w: number; h: number };
     if (o.sheet.kind === 'custom') size = { w: o.sheet.w * MM, h: o.sheet.h * MM };
@@ -219,15 +246,13 @@ export function layoutSheets(
     const short = Math.min(size.w, size.h);
     const long = Math.max(size.w, size.h);
     const margin = Math.max(0, o.margin) * MM;
-    // Bleed, marks and labels must print too, so they go inside the printer's margin.
-    const room = (w: number, h: number) => ({
-      w: w - 2 * (margin + reserve),
-      h: h - 2 * (margin + reserve),
-    });
-    const fitScale = (w: number, h: number) => {
-      const r = room(w, h);
-      return Math.min(r.w / impW, r.h / impH);
-    };
+    // Bleed, marks and labels must print too, so they go inside the printer's margin; the gaps
+    // between units do not scale.
+    const fitScale = (w: number, h: number) =>
+      Math.min(
+        (w - 2 * (margin + reserve) - (across - 1) * gap) / (across * unitW),
+        (h - 2 * (margin + reserve) - (down - 1) * gap) / (down * unitH),
+      );
     let landscape: boolean;
     if (o.orientation === 'auto') landscape = fitScale(long, short) > fitScale(short, long);
     else landscape = o.orientation === 'landscape';
@@ -239,7 +264,7 @@ export function layoutSheets(
       scale = 1;
       if (fit < 1 - 1e-6) {
         warnings.push(
-          `At 100 % the imposition (${fmtMm(impW)} × ${fmtMm(impH)} mm) does not fit the sheet with its margins and marks; it will be cut off.`,
+          `At 100 % the imposition (${fmtMm(gangW(1))} × ${fmtMm(gangH(1))} mm) does not fit the sheet with its margins and marks; it will be cut off.`,
         );
       }
     }
@@ -252,20 +277,25 @@ export function layoutSheets(
     warnings.push(`Pages are scaled to ${Math.round(scale * 1000) / 10} % to fit the sheet.`);
   }
 
-  const tw = impW * scale;
-  const th = impH * scale;
-  const trim: Rect = {
-    x: (width - tw) / 2,
-    y: (height - th) / 2,
-    w: tw,
-    h: th,
-  };
+  const tw = gangW(scale);
+  const th = gangH(scale);
+  const trim: Rect = { x: (width - tw) / 2, y: (height - th) / 2, w: tw, h: th };
   const bleedRect: Rect = {
     x: trim.x - bleed,
     y: trim.y - bleed,
     w: tw + 2 * bleed,
     h: th + 2 * bleed,
   };
+  const uw = unitW * scale;
+  const uh = unitH * scale;
+  const units: Rect[][] = Array.from({ length: down }, (_, r) =>
+    Array.from({ length: across }, (_, c) => ({
+      x: trim.x + c * (uw + gap),
+      y: trim.y + th - r * (uh + gap) - uh,
+      w: uw,
+      h: uh,
+    })),
+  );
   const orientation = width > height ? 'landscape' : 'portrait';
 
   // Turning the sheet left ↔ right is our back view (no rotation). On a landscape sheet that is a
@@ -274,31 +304,31 @@ export function layoutSheets(
   const printerFlip = o.flip === 'auto' ? natural : o.flip;
   const backRotated = printerFlip !== natural;
 
+  // Marks sit outside the ganged area, at every cut line and every fold line.
   const off = Math.max(MARK_OFFSET, bleed);
+  const top = trim.y + th;
+  const right = trim.x + tw;
+  const vertical = (x: number, into: Segment[]) => {
+    into.push({ x1: x, y1: top + off, x2: x, y2: top + off + MARK_LENGTH });
+    into.push({ x1: x, y1: trim.y - off, x2: x, y2: trim.y - off - MARK_LENGTH });
+  };
+  const horizontal = (y: number, into: Segment[]) => {
+    into.push({ x1: trim.x - off, y1: y, x2: trim.x - off - MARK_LENGTH, y2: y });
+    into.push({ x1: right + off, y1: y, x2: right + off + MARK_LENGTH, y2: y });
+  };
+  const cutXs = units[0]!.flatMap((u) => [u.x, u.x + u.w]);
+  const cutYs = units.map((r) => r[0]!).flatMap((u) => [u.y, u.y + u.h]);
   const cropMarks: Segment[] = [];
   if (o.cropMarks) {
-    const xs = [trim.x, trim.x + tw];
-    const ys = [trim.y, trim.y + th];
-    for (const x of xs) {
-      for (const y of ys) {
-        const sx = x === trim.x ? -1 : 1;
-        const sy = y === trim.y ? -1 : 1;
-        cropMarks.push({ x1: x + sx * off, y1: y, x2: x + sx * (off + MARK_LENGTH), y2: y });
-        cropMarks.push({ x1: x, y1: y + sy * off, x2: x, y2: y + sy * (off + MARK_LENGTH) });
-      }
-    }
+    for (const x of dedupe(cutXs)) vertical(x, cropMarks);
+    for (const y of dedupe(cutYs)) horizontal(y, cropMarks);
   }
   const foldMarks: Segment[] = [];
   if (o.foldMarks) {
-    for (let c = 1; c < cols; c++) {
-      const x = trim.x + c * page.w * scale;
-      foldMarks.push({ x1: x, y1: trim.y + th + off, x2: x, y2: trim.y + th + off + MARK_LENGTH });
-      foldMarks.push({ x1: x, y1: trim.y - off, x2: x, y2: trim.y - off - MARK_LENGTH });
-    }
-    for (let r = 1; r < rows; r++) {
-      const y = trim.y + th - r * page.h * scale;
-      foldMarks.push({ x1: trim.x - off, y1: y, x2: trim.x - off - MARK_LENGTH, y2: y });
-      foldMarks.push({ x1: trim.x + tw + off, y1: y, x2: trim.x + tw + off + MARK_LENGTH, y2: y });
+    for (const u of units[0]!)
+      for (let c = 1; c < cols; c++) vertical(u.x + c * page.w * scale, foldMarks);
+    for (const u of units.map((r) => r[0]!)) {
+      for (let r = 1; r < rows; r++) horizontal(u.y + u.h - r * page.h * scale, foldMarks);
     }
   }
   const slugAt = o.slug
@@ -308,31 +338,46 @@ export function layoutSheets(
       }
     : null;
 
-  function place(sheet: number, side: 'front' | 'back'): PlacedSlot[] {
-    const slots = plan.sheets[sheet]?.[side] ?? [];
+  function place(paper: number, side: 'front' | 'back'): PlacedSlot[] {
+    const out: PlacedSlot[] = [];
     const turn = side === 'back' && backRotated;
-    return slots.map((slot) => {
-      // A back printed top ↔ bottom is our back view turned by 180°.
-      const col = turn ? cols - 1 - slot.col : slot.col;
-      const row = turn ? rows - 1 - slot.row : slot.row;
-      const rotation = (turn ? (slot.rotation + 180) % 360 : slot.rotation) as Rotation;
-      return {
-        slot,
-        rotation,
-        rect: {
-          x: trim.x + col * page.w * scale,
-          y: trim.y + (rows - 1 - row) * page.h * scale,
-          w: page.w * scale,
-          h: page.h * scale,
-        },
-        outer: {
-          top: row === 0,
-          bottom: row === rows - 1,
-          left: col === 0,
-          right: col === cols - 1,
-        },
-      };
-    });
+    for (let ur = 0; ur < down; ur++) {
+      for (let uc = 0; uc < across; uc++) {
+        const sheet = gang.sheetAt(paper, uc, ur);
+        if (sheet === null) continue;
+        // In the back view the sheet is turned left ↔ right, so a unit's back is in the mirrored
+        // column (and the units are evenly spaced and centred, so it lands right behind it).
+        const unit = units[ur]![side === 'back' ? across - 1 - uc : uc]!;
+        for (const slot of plan.sheets[sheet]?.[side] ?? []) {
+          let rect: Rect = {
+            x: unit.x + slot.col * page.w * scale,
+            y: unit.y + (rows - 1 - slot.row) * page.h * scale,
+            w: page.w * scale,
+            h: page.h * scale,
+          };
+          let rotation = slot.rotation;
+          let outer = {
+            top: slot.row === 0,
+            bottom: slot.row === rows - 1,
+            left: slot.col === 0,
+            right: slot.col === cols - 1,
+          };
+          if (turn) {
+            // A back printed for a top ↔ bottom flip is the back view turned 180° on the page.
+            rect = {
+              x: width - rect.x - rect.w,
+              y: height - rect.y - rect.h,
+              w: rect.w,
+              h: rect.h,
+            };
+            rotation = ((rotation + 180) % 360) as Rotation;
+            outer = { top: outer.bottom, bottom: outer.top, left: outer.right, right: outer.left };
+          }
+          out.push({ slot, sheet, rect, rotation, outer });
+        }
+      }
+    }
+    return out;
   }
 
   return {
@@ -342,6 +387,8 @@ export function layoutSheets(
     scale,
     trim,
     bleed: bleedRect,
+    gang,
+    units,
     backRotated,
     printerFlip,
     cropMarks,
@@ -350,6 +397,13 @@ export function layoutSheets(
     warnings,
     place,
   };
+}
+
+/** Unique values (cut lines shared by touching units appear once). */
+function dedupe(xs: number[]) {
+  const out: number[] = [];
+  for (const x of xs) if (!out.some((y) => Math.abs(y - x) < 1e-6)) out.push(x);
+  return out;
 }
 
 const fmtMm = (pt: number) => Math.round((pt / MM) * 10) / 10;

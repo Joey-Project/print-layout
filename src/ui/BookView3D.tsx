@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { Plan, Recipe, Slot } from '../engine';
+import type { GangPlan, Plan, Recipe, Slot } from '../engine';
 import type { PanelArt } from './pdfArt';
 import {
   logEvent,
@@ -120,6 +120,7 @@ export function BookView3D({
   art = null,
   artVersion = 0,
   pdfAspect = null,
+  gang = null,
 }: {
   recipe: Recipe;
   plan: Plan;
@@ -129,6 +130,8 @@ export function BookView3D({
   artVersion?: number;
   /** Page height / width of the loaded PDF; offered as the "From PDF" page shape. */
   pdfAspect?: number | null;
+  /** Several recipe sheets per printed sheet (from the print settings): start by cutting them. */
+  gang?: GangPlan | null;
   /** Filled with a handle that snapshots the viewer for bug reports. */
   debug?: React.RefObject<ViewerDebug | null>;
   /** Viewer state to restore (from a loaded bug report); `onRestored` fires once applied. */
@@ -144,11 +147,11 @@ export function BookView3D({
   const aspect = shape === -1 && pdfAspect ? pdfAspect : PAGE_SHAPES[Math.max(0, shape)]!.aspect;
   const built = useMemo((): { tl: Timeline } | { error: string } => {
     try {
-      return { tl: buildTimeline(recipe, plan, aspect) };
+      return { tl: buildTimeline(recipe, plan, aspect, gang) };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
-  }, [recipe, plan, aspect]);
+  }, [recipe, plan, aspect, gang]);
   const tl = 'tl' in built ? built.tl : null;
 
   const [time, setTime] = useState(0);

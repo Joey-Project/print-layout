@@ -228,3 +228,95 @@ describe('fitting a page of another shape into a panel', () => {
     expect(f.H - top).toBeCloseTo(f.y, 9); // distance from the panel's top edge
   });
 });
+
+describe('ganging several sheets onto one printed sheet', () => {
+  const r = recipe('saddle-stitch');
+  // A6 pages: each sheet is an A5 spread; two fit on A4.
+  const A6 = { w: 105 * MM, h: 148 * MM };
+  const plan = buildPlan(r, 16); // 4 recipe sheets
+
+  it('puts two A5 spreads on each side of A4 at 100 %', () => {
+    const l = layoutSheets(
+      plan,
+      A6,
+      opts('home', { scaling: 'actual', margin: 0, gang: { across: 1, down: 2, order: 'stack' } }),
+    );
+    expect(l.warnings).toEqual([]);
+    expect(l.orientation).toBe('portrait');
+    expect(l.gang.papers).toBe(2);
+    expect(l.units).toHaveLength(2);
+    // Stacked vertically, each 210 × 148 mm.
+    expect(l.units[0]![0]!.w / MM).toBeCloseTo(210, 6);
+    expect(l.units[0]![0]!.y).toBeGreaterThan(l.units[1]![0]!.y);
+    // Printed sheet 1 carries recipe sheets 1 and 3 (cut and stack: piles of sheets 1–2 and 3–4).
+    expect([...new Set(l.place(0, 'front').map((p) => p.sheet))].sort()).toEqual([0, 2]);
+  });
+
+  it.each([
+    ['turned like a book page', 'auto'],
+    ['turned top to bottom', 'long'],
+  ] as const)("registers every unit's back behind its front when %s", (_n, flip) => {
+    for (const gang of [
+      { across: 2, down: 1 },
+      { across: 2, down: 2 },
+      { across: 3, down: 1 },
+    ]) {
+      const l = layoutSheets(
+        plan,
+        A6,
+        opts('shop', { flip, bleed: 3, gutter: 4, gang: { ...gang, order: 'stack' } }),
+      );
+      for (let paper = 0; paper < l.gang.papers; paper++) {
+        const front = l.place(paper, 'front');
+        const back = l.place(paper, 'back');
+        for (const b of back) {
+          // The front panel sharing this paper: same recipe sheet, mirrored column.
+          const f = front.find(
+            (x) =>
+              x.sheet === b.sheet &&
+              x.slot.col === r.grid.cols - 1 - b.slot.col &&
+              x.slot.row === b.slot.row,
+          )!;
+          expect(f).toBeDefined();
+          if (l.backRotated) {
+            // Turned top ↔ bottom: front (x, y) is back-page (x, H − y).
+            expect(b.rect.x).toBeCloseTo(f.rect.x, 6);
+            expect(b.rect.y).toBeCloseTo(l.height - (f.rect.y + f.rect.h), 6);
+          } else {
+            // Turned left ↔ right: front (x, y) is back-page (W − x, y).
+            expect(b.rect.x).toBeCloseTo(l.width - (f.rect.x + f.rect.w), 6);
+            expect(b.rect.y).toBeCloseTo(f.rect.y, 6);
+          }
+        }
+      }
+    }
+  });
+
+  it('marks every cut line outside the ganged area, clear of the bleed', () => {
+    const l = layoutSheets(
+      plan,
+      A6,
+      opts('shop', { bleed: 3, gutter: 4, gang: { across: 2, down: 1, order: 'stack' } }),
+    );
+    // Four vertical cut lines (two per unit) × above and below, two horizontal × left and right.
+    expect(l.cropMarks).toHaveLength(4 * 2 + 2 * 2);
+    // A fold in each unit, marked above and below.
+    expect(l.foldMarks).toHaveLength(2 * 2);
+    // Units are 3 + 4 + 3 mm apart.
+    const [a, b] = l.units[0]!;
+    expect((b!.x - (a!.x + a!.w)) / MM).toBeCloseTo(10, 6);
+    for (const m of l.cropMarks) {
+      for (const [x, y] of [
+        [m.x1, m.y1],
+        [m.x2, m.y2],
+      ] as const) {
+        const inside =
+          x > l.bleed.x + 1e-9 &&
+          x < l.bleed.x + l.bleed.w - 1e-9 &&
+          y > l.bleed.y + 1e-9 &&
+          y < l.bleed.y + l.bleed.h - 1e-9;
+        expect(inside).toBe(false);
+      }
+    }
+  });
+});

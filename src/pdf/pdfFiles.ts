@@ -241,14 +241,14 @@ async function drawSide(
   src: PDFDocument,
   info: PdfPageInfo[],
   layout: SheetLayout,
-  sheet: number,
+  paper: number,
   side: 'front' | 'back',
   bleed: number,
   extras: { slug: { font: PDFFont; text: string } | null; registration: PDFRef },
 ) {
   const { slug, registration } = extras;
   const page = out.addPage([layout.width, layout.height]);
-  for (const placed of layout.place(sheet, side)) {
+  for (const placed of layout.place(paper, side)) {
     const n = placed.slot.page;
     if (n === null || n > info.length) continue;
     const srcPage = src.getPage(n - 1);
@@ -271,7 +271,7 @@ async function drawSide(
   }
   drawMarks(page, layout, registration);
   if (slug && layout.slugAt) {
-    page.drawText(`${slug.text} · sheet ${sheet + 1} ${side}`, {
+    page.drawText(`${slug.text} · sheet ${paper + 1} of ${layout.gang.papers} ${side}`, {
       x: layout.slugAt.x,
       y: layout.slugAt.y,
       size: 6,
@@ -341,7 +341,7 @@ export interface ExportInput {
   options: PrintOptions;
   /** File name stem, e.g. the source PDF's name. */
   baseName: string;
-  /** Only this sheet (for a quick preview). */
+  /** Only this printed sheet (for a quick preview). */
   onlySheet?: number;
 }
 
@@ -357,7 +357,11 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const pageSize = input.source ? finishedPageSize(info) : input.dummyPageSize;
   const layout = layoutSheets(plan, pageSize, options);
   const bleed = Math.max(0, options.bleed) * MM;
-  const sheets = input.onlySheet !== undefined ? [input.onlySheet] : plan.sheets.map((_, i) => i);
+  // Printed sheets (several recipe sheets each when ganged).
+  const sheets =
+    input.onlySheet !== undefined
+      ? [input.onlySheet]
+      : Array.from({ length: layout.gang.papers }, (_, i) => i);
   const hasBacks = plan.sheets.some((s) => s.back.length > 0);
   const title = `${input.baseName} · ${recipe.name}`;
 

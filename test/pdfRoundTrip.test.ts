@@ -330,4 +330,35 @@ describe('PDF export and de-imposition round trip', () => {
       '8',
     ]);
   });
+  it.each([
+    ['book-page turn', 'auto'],
+    ['top-to-bottom turn', 'long'],
+  ] as const)('gangs two spreads per printed sheet (%s)', async (_n, flip) => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 16);
+    const A6 = { w: 105 * MM, h: 148 * MM };
+    const { files, layout } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A6,
+      options: opts('home', { flip, gang: { across: 1, down: 2, order: 'stack' } }),
+      baseName: 'test',
+    });
+    expect(layout.gang.papers).toBe(2);
+    const pages = await visibleNumbers(files[0]!.bytes);
+    expect(pages).toHaveLength(4);
+    for (let paper = 0; paper < 2; paper++) {
+      for (const side of ['front', 'back'] as const) {
+        const want = layout
+          .place(paper, side)
+          .filter((p) => p.slot.page !== null)
+          .map((p) => `${p.slot.page}${p.rotation ? '↻' : ''}`)
+          .sort();
+        expect(pages[paper * 2 + (side === 'back' ? 1 : 0)]!.sort()).toEqual(want);
+      }
+    }
+    // Printed sheet 1's front: the outer spread of each pile (16|1 and 12|5).
+    expect(pages[0]!.sort()).toEqual(['1', '12', '16', '5']);
+  });
 });
