@@ -259,7 +259,8 @@ export function BookView3D({
       e.stopImmediatePropagation();
       e.preventDefault();
       const explode = live.current.explode;
-      const reach = pt.reachAt(rank, point.x, point.y, point.z, explode);
+      // Measured with the pose the hit point was taken from (before any settling leaf lands).
+      const reach = pt.reachAt(rank, live.current.time, point.x, point.y, point.z, explode);
       const startTime = pt.grab(live.current.time, rank);
       const offset = pt.progressOf(startTime, rank) - pt.progressAt(onPlane.x, onPlane.y, reach);
       drag = { rank, reach, offset };
@@ -368,8 +369,9 @@ export function BookView3D({
         }
         s.tl.poseAt(t, L.explode, s.mats);
         s.groups.forEach((g, i) => g.matrix.copy(s.mats[i]!));
-        const axis = s.tl.spineAxisAt(t, L.explode);
         for (const sm of s.seams) {
+          // Each section's folds wrap round that section's own spine axis.
+          const axis = s.tl.spineAxisAt(t, L.explode, sm.seam.a);
           const arr = sm.positions.array as Float32Array;
           const gap = seamStrip(
             sm.seam,
