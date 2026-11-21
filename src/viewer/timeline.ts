@@ -44,7 +44,7 @@ export interface PageTurn {
    * How far out from the spine a world point on leaf `rank` is, as a fraction of the leaf's width
    * across the spine (0 = at the spine, 1 = outer edge).
    */
-  reachAt(rank: number, x: number, y: number, z: number, explode: number): number;
+  reachAt(rank: number, time: number, x: number, y: number, z: number, explode: number): number;
   /** Timeline time showing leaf `rank` turned by `progress` (inverse of the easing). */
   timeFor(rank: number, progress: number): number;
   /** Which leaf (0 = first turned) a panel belongs to. */
@@ -95,10 +95,11 @@ export interface Timeline {
   /** Write each panel's world matrix at time t. `explode` ≥ 1 spreads layers apart. */
   poseAt(t: number, explode: number, out: Matrix4[]): void;
   /**
-   * The book's spine axis while it is being read (from the closed book on), or null. Every leaf
-   * turns about this one axis, so the folds at the spine are arcs around it.
+   * The spine axis of the section holding `panel` (default: the first) while the book is being
+   * read (from the closed book on), or null. Every leaf of a section turns about its section's
+   * axis, so that section's folds at the spine are arcs around it.
    */
-  spineAxisAt(t: number, explode: number): SpineAxis | null;
+  spineAxisAt(t: number, explode: number, panel?: number): SpineAxis | null;
 }
 
 export interface SpineAxis {
@@ -264,13 +265,21 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
   // ---- Reading: leaves in stack order (bound recipes only). ----
   const bound = recipe.reading.mode === 'bound' ? recipe.reading : null;
   const leafOrder: number[] = []; // panel indices, top leaf first
+  /** First and last leaf rank of each section (signature), in reading order. */
+  const sections: [number, number][] = [];
   if (bound) {
     for (const facets of finalFacets) {
+      const first = leafOrder.length;
       [...facets]
         .sort((a, b) => b.layer - a.layer)
         .forEach((f) => leafOrder.push(panelIndex.get(keyOf(f))!));
+      sections.push([first, leafOrder.length - 1]);
     }
   }
+  const sectionOfRank: number[] = [];
+  sections.forEach(([a, b], g) => {
+    for (let r = a; r <= b; r++) sectionOfRank[r] = g;
+  });
   const leafRank = new Map(leafOrder.map((p, i) => [p, i]));
   const leafCount = leafOrder.length;
 
@@ -327,6 +336,67 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
   }
   if (read) for (let k = 0; k <= leafCount; k++) stops.add(read.start + k);
 
+  /** A leaf's height above its section's axis in the closed book (negative: below it). */
+  function heightAboveAxis(rank: number, gap: number) {
+    const [a, b] = sections[sectionOfRank[rank] ?? 0] ?? [0, 0];
+    return ((a + b) / 2 - rank) * gap;
+  }
+
+  /** Unit vector (world x, y) from the spine toward the unturned leaves. */
+  const outward: [number, number] = !spine
+    ? [1, 0]
+    : spine.edge === 'left'
+      ? [1, 0]
+      : spine.edge === 'right'
+        ? [-1, 0]
+        : spine.edge === 'top'
+          ? [0, -1]
+          : [0, 1];
+
+  /**
+   * Where the spine axis of the section holding leaf `rank` is at `time`: its height `z`, and `dx`,
+   * how far it is moved along `outward` (toward the unturned side).
+   *
+   * Each section turns about its own middle: closed, its leaves sit at (leafCount − 1 − r)·gap, so
+   * the axis is at the middle of that range; once read, at the middle of r·gap. Sections on the two
+   * piles would then overlap at the spine (their folds bulge into the gutter at the same heights),
+   * so — like the width of a real spine — sections already read sit half their thickness toward the
+   * turned side and sections still to read toward the unturned side, while there is a pile on the
+   * other side. The section being read rises above both piles to turn its leaves, then settles.
+   * Each move happens while that section's first or last leaf turns: first rise, then slide in;
+   * at the end slide out, then settle. A single-section book (saddle stitch) never moves.
+   */
+  function sectionAxis(rank: number, time: number, gap: number) {
+    const g = sectionOfRank[rank] ?? 0;
+    const [a, b] = sections[g] ?? [0, 0];
+    const closed = (leafCount - 1 - (a + b) / 2) * gap;
+    if (!read) return { z: closed, dx: 0 };
+    const turned = ((a + b) / 2) * gap;
+    const high = Math.max(closed, turned);
+    const half = ((b - a) / 2) * gap + gap / 2; // half the section's thickness, plus clearance
+    // Phases within the first and last leaf's turn (a one-leaf section fits all four in one).
+    const span = a === b ? 0.5 : 1;
+    const p = (r: number) => Math.min(1, Math.max(0, time - read.start - r));
+    const enter = p(a) / span;
+    const exit = (p(b) - (1 - span)) / span;
+    const rise = smooth(2 * enter);
+    const slideIn = smooth(2 * enter - 1);
+    const slideOut = smooth(2 * exit);
+    const settle = smooth(2 * exit - 1);
+    // Is there a pile on the left (a section already read) / on the right (one still to read)?
+    const firstSection = sections[0]!;
+    const lastSection = sections[sections.length - 1]!;
+    const firstSpan = firstSection[0] === firstSection[1] ? 0.5 : 1;
+    const lastSpan = lastSection[0] === lastSection[1] ? 0.5 : 1;
+    const readPile =
+      sections.length > 1 ? smooth(2 * ((p(firstSection[1]) - (1 - firstSpan)) / firstSpan)) : 0;
+    const unreadPile = sections.length > 1 ? 1 - smooth(2 * (p(lastSection[0]) / lastSpan) - 1) : 0;
+    return {
+      z: closed + (high - closed) * rise - (high - turned) * settle,
+      dx: half * (readPile * (1 - slideIn) - unreadPile * slideOut),
+    };
+  }
+
   let pageTurn: PageTurn | null = null;
   if (read && spine) {
     const sp = spine;
@@ -347,15 +417,16 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
         return Math.acos(Math.min(1, Math.max(-1, d / r))) / Math.PI;
       },
       progressOf: (time, rank) => smooth(time - read.start - rank),
-      reachAt(rank, x, y, z, explode) {
+      reachAt(rank, time, x, y, z, explode) {
         // Distance from the spine axis in the plane across it; the leaf runs past the axis at its
         // own height above it, so subtract that to get the distance along the leaf.
         const gap = BASE_GAP * Math.max(1, explode);
-        const axisZ = ((leafCount - 1) / 2) * gap;
-        const height = ((leafCount - 1) / 2 - rank) * gap;
+        const axis = sectionAxis(rank, time, gap);
+        const height = heightAboveAxis(rank, gap);
         const unit = sp.axis === 'x' ? 1 : aspect;
-        const across = (sp.axis === 'x' ? x - spineWorld : y - spineWorld) / unit;
-        const up = (z - axisZ) / unit;
+        const shift = sp.axis === 'x' ? outward[0] * axis.dx : outward[1] * axis.dx;
+        const across = ((sp.axis === 'x' ? x : y) - spineWorld - shift) / unit;
+        const up = (z - axis.z) / unit;
         const along = Math.sqrt(Math.max(0, across * across + up * up - (height / unit) ** 2));
         return Math.min(1, along);
       },
@@ -483,16 +554,14 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
       if (read && spine && tt > read.start) {
         const rank = leafRank.get(i)!;
         const ur = smooth(tt - read.start - rank);
-        // Like a real book block, every leaf turns about the middle of the spine (half the block's
-        // thickness up), not about its own height. Leaves keep their distance from that axis, so a
-        // turning leaf never cuts through the piles or the folds around the spine, and it still lands
-        // at rank·gap: the mirror of its starting height.
-        const zUnturned = (leafCount - 1 - rank) * gap;
-        const axisZ = ((leafCount - 1) / 2) * gap;
+        // Like a real book block, the leaves of a section turn about the middle of that section's
+        // spine, not about their own heights: nested sheets stay nested and their folds are arcs
+        // around one axis (see `axisHeight`).
         hingeRotation(spine.axis, spine.at, aspect, spine.sign * Math.PI * ur, hinge);
-        m.makeTranslation(0, 0, axisZ)
+        const axis = sectionAxis(rank, tt, gap);
+        m.makeTranslation(outward[0] * axis.dx, outward[1] * axis.dx, axis.z)
           .multiply(hinge)
-          .multiply(lift.makeTranslation(0, 0, zUnturned - axisZ))
+          .multiply(lift.makeTranslation(0, 0, heightAboveAxis(rank, gap)))
           .multiply(flat);
         return;
       }
@@ -500,12 +569,13 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     });
   }
 
-  function spineAxisAt(time: number, explode: number): SpineAxis | null {
+  function spineAxisAt(time: number, explode: number, panel?: number): SpineAxis | null {
     if (!read || !spine || time < read.start) return null;
-    const z = ((leafCount - 1) / 2) * BASE_GAP * Math.max(1, explode);
+    const rank = (panel === undefined ? undefined : leafRank.get(panel)) ?? 0;
+    const { z, dx } = sectionAxis(rank, time, BASE_GAP * Math.max(1, explode));
     return spine.axis === 'x'
-      ? { origin: [spine.at, 0, z], dir: [0, 1, 0] }
-      : { origin: [0, -spine.at * aspect, z], dir: [1, 0, 0] };
+      ? { origin: [spine.at + outward[0] * dx, 0, z], dir: [0, 1, 0] }
+      : { origin: [0, -spine.at * aspect + outward[1] * dx, z], dir: [1, 0, 0] };
   }
 
   return {

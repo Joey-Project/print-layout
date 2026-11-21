@@ -220,8 +220,12 @@ describe('3D timeline agrees with the 2D plan', () => {
       ['saddle-stitch', 12],
       ['saddle-stitch', 20],
       ['saddle-stitch-rtl', 12],
+      // Gathered sections: each nests round its own spine.
+      ['sewn-signatures-4', 20],
+      ['sewn-signatures-4', 32],
+      ['loose-leaves', 6],
     ] as const) {
-      const r = recipe(id);
+      const r = recipeOf(id);
       const tl = buildTimeline(r, buildPlan(r, pages), ASPECT);
       const read = tl.segments.find((s) => s.kind === 'read')!;
       const mats = tl.panels.map(() => new Matrix4());
@@ -230,13 +234,16 @@ describe('3D timeline agrees with the 2D plan', () => {
       for (let t = read.start; t <= read.end + 1e-9; t += 0.05) {
         tl.poseAt(t, 10, mats);
         const lines: P[][] = tl.panels.map((p, i) => {
-          // Spine at x = 1 (the fold line), outer edge at x = 0 or 2.
-          const spine = new Vector3(1, 0, 0).applyMatrix4(mats[i]!);
-          const outer = new Vector3(p.col === 0 ? 0 : 2, 0, 0).applyMatrix4(mats[i]!);
+          // Folded 2-up: spine at x = 1 (the fold line), outer edge at x = 0 or 2. Loose leaves
+          // (1 column): spine at x = 0, outer edge at x = 1.
+          const folded = r.grid.cols === 2;
+          const spine = new Vector3(folded ? 1 : 0, 0, 0).applyMatrix4(mats[i]!);
+          const edge = folded ? (p.col === 0 ? 0 : 2) : 1;
+          const outer = new Vector3(edge, 0, 0).applyMatrix4(mats[i]!);
           return [xz(spine), xz(outer)];
         });
         for (const seam of tl.seams) {
-          seamStrip(seam, mats[seam.a]!, mats[seam.b]!, 16, out, tl.spineAxisAt(t, 10));
+          seamStrip(seam, mats[seam.a]!, mats[seam.b]!, 16, out, tl.spineAxisAt(t, 10, seam.a));
           lines.push(Array.from({ length: 17 }, (_, k): P => [out[k * 6]!, out[k * 6 + 2]!]));
         }
         for (let i = 0; i < lines.length; i++) {
@@ -254,7 +261,7 @@ describe('3D timeline agrees with the 2D plan', () => {
         }
       }
     }
-    expect(crossings).toEqual([]);
+    expect(crossings.slice(0, 12)).toEqual([]); // the first few, if any, say where
   });
 
   it('trims the head folds of a signature when reading starts, keeping the spine', () => {
@@ -280,7 +287,7 @@ describe('3D timeline agrees with the 2D plan', () => {
       for (const p of [0, 0.3, 0.7]) {
         tl.poseAt(turn.timeFor(1, p), explode, mats);
         const w = new Vector3(1.5, -0.5 * ASPECT, 0).applyMatrix4(mats[3]!);
-        expect(turn.reachAt(1, w.x, w.y, w.z, explode)).toBeCloseTo(0.5, 6);
+        expect(turn.reachAt(1, turn.timeFor(1, p), w.x, w.y, w.z, explode)).toBeCloseTo(0.5, 6);
       }
     }
     // With that reach, moving the pointer from x = 1.5 to the spine turns the page halfway, not
