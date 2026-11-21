@@ -129,7 +129,7 @@ describe('setup-ci file plan', () => {
 
     assert.match(workflow, /swift-format lint --strict --recursive/);
     assert.match(workflow, /swiftlint lint --strict --no-cache/);
-    assert.match(config, /disabled_rules:\n  - trailing_comma/);
+    assert.match(config, /disabled_rules:\n {2}- trailing_comma/);
   });
 });
 

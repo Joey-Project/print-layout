@@ -1,0 +1,70 @@
+# Builds the app and publishes it to the `gh-pages` branch, which GitHub Pages serves.
+# One-time setup: Settings → Pages → Build and deployment → "Deploy from a branch" → gh-pages / (root).
+name: Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the gh-pages branch
+  pages: write # request the Pages build
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Custom domain written to CNAME on every publish. Point a DNS CNAME record for it at
+  # <owner>.github.io. Set to '' to serve from <owner>.github.io/<repo>/ instead (the build uses
+  # relative asset paths, so both work).
+  PAGES_DOMAIN: booklet.mahane.me
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+      - name: Set up Node with pnpm cache
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm run build
+      - name: Publish dist to gh-pages
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          if [ -n "$PAGES_DOMAIN" ]; then echo "$PAGES_DOMAIN" > CNAME; fi
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA::7}"
+          git push -f -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+      - name: Request a Pages build
+        # Pushes made with GITHUB_TOKEN do not start a Pages build by themselves
+        # (https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site#troubleshooting-publishing-from-a-branch),
+        # so ask for one explicitly.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/builds" --silent; then
+            echo "Requested a GitHub Pages build of gh-pages."
+          else
+            echo "::warning::Could not request a Pages build. Enable Pages (Settings → Pages → Deploy from a branch → gh-pages / root), then re-run this workflow."
+          fi
