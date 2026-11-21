@@ -4,6 +4,15 @@ import { seamStrip } from '../src/viewer/seams';
 import { buildTimeline } from '../src/viewer/timeline';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
+/** Loose single leaves bound along the left edge (no folds), e.g. perfect-bound cut sheets. */
+const looseLeaves: Recipe = {
+  id: 'loose-leaves',
+  name: 'Loose leaves',
+  grid: { cols: 1, rows: 1 },
+  folds: [],
+  reading: { mode: 'bound', bindingEdge: 'left', sheetsPerSignature: 1 },
+};
+const recipeOf = (id: string) => (id === looseLeaves.id ? looseLeaves : recipe(id));
 const ASPECT = Math.SQRT2;
 
 /** The face of each panel that points at the camera (+z), with where it sits. */
@@ -42,10 +51,11 @@ describe('3D timeline agrees with the 2D plan', () => {
     ['saddle-stitch-rtl', 12],
     ['signature-8', 16],
     ['sewn-signatures-4', 20],
+    ['loose-leaves', 6],
   ];
 
   it.each(cases)('%s with %i pages reads in order while turning leaves', (id, pages) => {
-    const r = recipe(id);
+    const r = recipeOf(id);
     const plan = buildPlan(r, pages);
     const tl = buildTimeline(r, plan, ASPECT);
     const read = tl.segments.find((s) => s.kind === 'read')!;
