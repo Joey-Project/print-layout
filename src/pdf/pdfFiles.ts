@@ -44,11 +44,9 @@ import {
 import {
   physicalSize,
   displayedToBox,
-  imposedArea,
-  panelRegion,
+  proofLayout,
   type ImposedOptions,
   type PdfPageInfo,
-  sideMap,
   slotsByPosition,
 } from './imposed';
 
@@ -426,28 +424,21 @@ export async function deimposePdf(
   const src = await loadPdf(imposed);
   flattenForPrint(src);
   const info = pageInfo(src);
-  const sides = sideMap(info.length, options.order);
+  const proof = proofLayout(info, plan, options);
   const out = await PDFDocument.create();
   out.setTitle(`${baseName} (reading order)`);
   out.setCreator('Print Layout');
   const bySlot = slotsByPosition(plan);
   for (let pos = 1; pos <= plan.slotCount; pos++) {
     const at = bySlot.get(pos);
-    const index = at ? sides.pageOf(at.sheet, at.side) : null;
-    if (!at || index === null) {
+    const region = at ? proof.region(at.sheet, at.side, at.slot.col, at.slot.row) : null;
+    if (!at || !region) {
       const prev = out.getPageCount() ? out.getPage(0).getSize() : { width: 420, height: 595 };
       out.addPage([prev.width, prev.height]);
       continue;
     }
+    const index = region.index;
     const pi = info[index]!;
-    const region = panelRegion(
-      imposedArea(pi, options),
-      plan.grid,
-      at.slot.col,
-      at.slot.row,
-      at.side,
-      options,
-    );
     const box = displayedToBox(pi.crop, pi.rotate, region.rect);
     // Keep the physical size: user units are /UserUnit points each.
     const shown = physicalSize(pi, box);

@@ -13,7 +13,7 @@ import {
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
 import { sectionPageSize } from '../pdf/geometry';
-import { DEFAULT_IMPOSED, sideMap, type ImposedOptions } from '../pdf/imposed';
+import { DEFAULT_IMPOSED, proofSheetCount, type ImposedOptions } from '../pdf/imposed';
 import { usePdfArt, type LoadedPdf } from './pdfArt';
 import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
 import { SourcePanel } from './SourcePanel';
@@ -77,8 +77,11 @@ export function App() {
   const effectivePages = useMemo(() => {
     if (!pdf) return pageCount;
     if (pdf.mode === 'reading') return pdf.info.length;
-    return Math.max(1, sideMap(pdf.info.length, imposed.order).sheetCount) * pagesPerSheet(active);
-  }, [pdf, pageCount, imposed.order, active]);
+    // Printed sheets × parts per sheet (several per sheet, or sections) = recipe sheets.
+    return (
+      Math.max(1, proofSheetCount(pdf.info.length, active.grid, imposed)) * pagesPerSheet(active)
+    );
+  }, [pdf, pageCount, imposed, active]);
 
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
     try {
@@ -133,18 +136,31 @@ export function App() {
   const sectionAspect = section ? section.h / section.w : null;
   const printSections =
     print.options.sheet.kind === 'fit' ? null : (print.options.sections ?? null);
-  const gang = useMemo(
-    () => (plan ? paperPlan(plan.sheets.length, plan.grid, printGang, printSections) : null),
-    [
-      plan,
-      printGang.across,
-      printGang.down,
-      printGang.order,
-      printSections?.across,
-      printSections?.down,
-      printSections?.blank,
-    ],
-  );
+  const proofGang = imposed.gang ?? NO_GANG;
+  const proofSections = imposed.sections ?? null;
+  const gang = useMemo(() => {
+    if (!plan) return null;
+    // Proofing an imposed PDF: start from its printed sheets, cut the way it says.
+    if (pdf?.mode === 'imposed') {
+      return paperPlan(plan.sheets.length, plan.grid, proofGang, proofSections);
+    }
+    return paperPlan(plan.sheets.length, plan.grid, printGang, printSections);
+  }, [
+    plan,
+    pdf?.mode,
+    printGang.across,
+    printGang.down,
+    printGang.order,
+    printSections?.across,
+    printSections?.down,
+    printSections?.blank,
+    proofGang.across,
+    proofGang.down,
+    proofGang.order,
+    proofSections?.across,
+    proofSections?.down,
+    proofSections?.blank,
+  ]);
 
   // ---- Bug reports. ----
   const buildReport = (note: string): { report: DebugReport; screenshot: string | null } => {

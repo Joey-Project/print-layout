@@ -388,4 +388,78 @@ describe('PDF export and de-imposition round trip', () => {
     ]);
     expect(layout.scale).toBeCloseTo(1, 9); // the dummy is sized to the sections
   });
+  it.each([
+    ['two per sheet, cut and stack', { gang: { across: 2, down: 1, order: 'stack' } }, {}],
+    [
+      '2 × 2, backs top-to-bottom',
+      { gang: { across: 2, down: 2, order: 'stack' }, flip: 'long' },
+      { backRotated: true },
+    ],
+    [
+      'sheet in thirds, blank third',
+      { sheet: { kind: 'preset', id: 'a4' }, sections: { across: 3, down: 1, blank: 'end' } },
+      {},
+    ],
+  ] as const)(
+    'proofs a ganged imposed PDF back into reading order (%s)',
+    async (_n, print, proof) => {
+      const r = recipe('saddle-stitch');
+      const plan = buildPlan(r, 16);
+      const A6 = { w: 105 * MM, h: 148 * MM };
+      const options = opts('shop', { ...print, gutter: 4 } as Partial<PrintOptions>);
+      const { files } = await exportImposed({
+        plan,
+        recipe: r,
+        source: null,
+        dummyPageSize: A6,
+        options,
+        baseName: 'test',
+      });
+      const back = await deimposePdf(
+        files[0]!.bytes,
+        plan,
+        {
+          ...DEFAULT_IMPOSED,
+          ...proof,
+          gang: options.gang,
+          gutter: options.gutter,
+          sections: options.sections,
+        },
+        'test',
+      );
+      const reading = await visibleNumbers(back.bytes);
+      expect(reading.map((n) => n.join())).toEqual(
+        Array.from({ length: 16 }, (_, i) => String(i + 1)),
+      );
+    },
+  );
+
+  it('proofs an imposed PDF whose printed sheets are in reverse order', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options: opts('home'),
+      baseName: 'test',
+    });
+    // Reverse the printed sheets (pairs of pages).
+    const src = await loadPdf(files[0]!.bytes);
+    const rev = await PDFDocument.create();
+    const order = [4, 5, 2, 3, 0, 1];
+    for (const p of await rev.copyPages(src, order)) rev.addPage(p);
+    const bytes = await rev.save();
+    const wrong = await visibleNumbers(
+      (await deimposePdf(bytes, plan, DEFAULT_IMPOSED, 't')).bytes,
+    );
+    expect(wrong.map((n) => n.join())).not.toEqual(
+      Array.from({ length: 12 }, (_, i) => String(i + 1)),
+    );
+    const right = await visibleNumbers(
+      (await deimposePdf(bytes, plan, { ...DEFAULT_IMPOSED, reversed: true }, 't')).bytes,
+    );
+    expect(right.map((n) => n.join())).toEqual(Array.from({ length: 12 }, (_, i) => String(i + 1)));
+  });
 });

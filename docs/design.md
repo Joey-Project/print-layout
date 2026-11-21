@@ -142,7 +142,13 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    in order; _copies_: every unit is the same sheet. Crop marks at every cut line, fold marks on
    every unit's folds. "Fill the sheet" picks the most units that fit. The 3D model then starts
    from the printed sheets: cut them apart, arrange the parts into sheet order, then stack, fold
-   and read as before. _(done; next: proofing ganged imposed PDFs)_
+   and read as before. **Sections**: alternatively divide a preset/custom sheet into equal
+   sections, one page each (e.g. A4 landscape in thirds for long, narrow pages); spreads fill whole
+   sections, leftover sections print blank and are cut off (hatched pieces in 3D). A part's back is
+   its front mirrored about the sheet's centre, so off-centre layouts register too. **Proofing**
+   reads the same arrangements back (several per sheet with a gap, or sections), optionally with
+   the printed sheets in reverse order, and the 3D proof starts from the PDF's printed sheets.
+   _(done)_
 6. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
 7. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
 

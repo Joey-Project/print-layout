@@ -572,3 +572,13 @@ label.inline {
 .gang .wide {
   flex-basis: 100%;
 }
+.row3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.row3 input,
+.row3 select {
+  width: 100%;
+  min-width: 0;
+}
