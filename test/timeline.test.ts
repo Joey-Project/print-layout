@@ -1,5 +1,5 @@
 import { Matrix4, Vector3 } from 'three';
-import { buildPlan, builtinRecipes, type Plan, type Recipe } from '../src/engine';
+import { buildPlan, builtinRecipes, paperPlan, type Plan, type Recipe } from '../src/engine';
 import { seamStrip } from '../src/viewer/seams';
 import { buildTimeline } from '../src/viewer/timeline';
 
@@ -77,6 +77,24 @@ describe('3D timeline agrees with the 2D plan', () => {
         expect(turned?.position, `spread ${k}: previous page`).toBe(2 * k);
         expect(turned?.upright, `spread ${k}: previous page upright`).toBe(true);
       }
+    }
+  });
+
+  it('still reads in order after cutting ganged sheets', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 16);
+    const gang = paperPlan(plan.sheets.length, r.grid, { across: 2, down: 2, order: 'stack' });
+    const tl = buildTimeline(r, plan, ASPECT, gang);
+    const read = tl.segments.find((s) => s.kind === 'read')!;
+    // Same reading geometry as without ganging.
+    const plain = buildTimeline(r, plan, ASPECT);
+    const a = tl.panels.map(() => new Matrix4());
+    const b = tl.panels.map(() => new Matrix4());
+    const offset = read.start - plain.segments.find((s) => s.kind === 'read')!.start;
+    for (const t of [0, 0.5, 3, 7.5]) {
+      tl.poseAt(read.start + t, 1, a);
+      plain.poseAt(read.start - offset + t, 1, b);
+      a.forEach((m, i) => expect(m.equals(b[i]!)).toBe(true));
     }
   });
 
@@ -296,6 +314,66 @@ describe('3D timeline agrees with the 2D plan', () => {
     expect(turn.progressAt(1, 0, 0.5)).toBeCloseTo(0.5, 9);
     expect(turn.progressAt(0.5, 0, 0.5)).toBeCloseTo(1, 9);
     expect(turn.progressOf(turn.timeFor(2, 0.25), 2)).toBeCloseTo(0.25, 9);
+  });
+
+  it('cuts ganged printed sheets apart and arranges the parts into sheet order', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 16); // 4 sheets, 2 per printed sheet
+    const gang = paperPlan(plan.sheets.length, r.grid, { across: 2, down: 1, order: 'stack' });
+    const tl = buildTimeline(r, plan, ASPECT, gang);
+    expect(tl.segments.slice(0, 3).map((s) => s.kind)).toEqual(['cut', 'arrange', 'collate']);
+    const mats = tl.panels.map(() => new Matrix4());
+    // Panel 0 of each recipe sheet (2 panels per sheet).
+    const sheetPos = (t: number) => {
+      tl.poseAt(t, 1, mats);
+      return [0, 2, 4, 6].map((i) => new Vector3().setFromMatrixPosition(mats[i]!));
+    };
+    // Printed: sheets 1 and 3 side by side on printed sheet 1, 2 and 4 on printed sheet 2.
+    const printed = sheetPos(0);
+    expect(printed[0]!.y).toBeCloseTo(printed[2]!.y, 9);
+    expect(printed[2]!.x - printed[0]!.x).toBeCloseTo(2.03, 9); // unit width + hairline
+    expect(printed[1]!.y).toBeLessThan(printed[0]!.y);
+    // Cut: the parts move apart.
+    const cutEnd = tl.segments[0]!.end;
+    const afterCut = sheetPos(cutEnd);
+    expect(afterCut[2]!.x - afterCut[0]!.x).toBeCloseTo(2.4, 9);
+    // Arranged: one column in sheet order, flat, as the un-ganged model starts.
+    const arranged = sheetPos(tl.segments[1]!.end);
+    expect(new Set(arranged.map((v) => Math.round(v.x * 1e9))).size).toBe(1);
+    expect(arranged.every((v) => Math.abs(v.z) < 1e-9)).toBe(true);
+    for (let k = 1; k < 4; k++) expect(arranged[k]!.y).toBeLessThan(arranged[k - 1]!.y);
+    const plain = buildTimeline(r, plan, ASPECT);
+    plain.poseAt(0, 1, mats);
+    const start = [0, 2, 4, 6].map((i) => new Vector3().setFromMatrixPosition(mats[i]!));
+    arranged.forEach((v, k) => expect(v.distanceTo(start[k]!)).toBeCloseTo(0, 9));
+  });
+
+  it('cuts the blank section off a sheet divided into thirds', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8); // 2 sheets, one spread per printed sheet
+    const paper = paperPlan(
+      plan.sheets.length,
+      r.grid,
+      { across: 1, down: 1, order: 'stack' },
+      {
+        across: 3,
+        down: 1,
+        blank: 'end',
+      },
+    );
+    const tl = buildTimeline(r, plan, ASPECT, paper);
+    expect(tl.segments.slice(0, 2).map((s) => s.kind)).toEqual(['cut', 'arrange']);
+    expect(tl.waste).toEqual([
+      { paper: 0, col: 2, row: 0, w: 1, h: 1 },
+      { paper: 1, col: 2, row: 0, w: 1, h: 1 },
+    ]);
+    const m = new Matrix4();
+    // Printed: the blank third sits right next to the spread.
+    expect(tl.wasteAt(0, 0, m)).toBe(true);
+    expect(new Vector3().setFromMatrixPosition(m).x).toBeCloseTo(2.03, 9);
+    // Cut off and gone once the sheets are arranged.
+    expect(tl.wasteAt(0, tl.segments[1]!.end, m)).toBe(false);
+    expect(tl.wasteAt(0, tl.duration, m)).toBe(false);
   });
 
   it('builds fold-only timelines for sequence recipes', () => {

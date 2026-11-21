@@ -135,8 +135,22 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    the recipe (TrimBox or margins), shown on the sheets, as an upright reading-order strip, and in
    3D; it can be cut back into a vector reading-order PDF. Tests impose a dummy, de-impose it and
    read each page's number back with pdf.js. _(done; next: automatic diff against the source PDF)_
-5. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
-6. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
+5. **Several per sheet (ganging)** — print `across × down` recipe sheets on each printed sheet,
+   separated by their bleed plus a cutting gap, centred so every unit's back lands behind its front
+   for either flip edge (`src/engine/gang.ts`, `layoutSheets`). _Cut and stack_: unit position j of
+   printed sheet p holds sheet j·P + p, so stacking the cut piles in position order gives the sheets
+   in order; _copies_: every unit is the same sheet. Crop marks at every cut line, fold marks on
+   every unit's folds. "Fill the sheet" picks the most units that fit. The 3D model then starts
+   from the printed sheets: cut them apart, arrange the parts into sheet order, then stack, fold
+   and read as before. **Sections**: alternatively divide a preset/custom sheet into equal
+   sections, one page each (e.g. A4 landscape in thirds for long, narrow pages); spreads fill whole
+   sections, leftover sections print blank and are cut off (hatched pieces in 3D). A part's back is
+   its front mirrored about the sheet's centre, so off-centre layouts register too. **Proofing**
+   reads the same arrangements back (several per sheet with a gap, or sections), optionally with
+   the printed sheets in reverse order, and the 3D proof starts from the PDF's printed sheets.
+   _(done)_
+6. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
+7. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
 
 ## Bug reports
 
