@@ -129,6 +129,15 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
 5. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
 6. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
 
+## Bug reports
+
+"Report a bug" saves `print-layout-report-<time>.json` and a matching `.png` of the 3D canvas. The
+JSON holds the inputs (exact recipe editor text, page count, padding, tab), the viewer state
+(time, play mode, speed, explode, page shape, camera), derived data for reading (stage caption,
+timeline segments, every panel's pose matrix, fold strips), recent interactions (grabs, drags,
+releases, transport, option changes) and the commit the app was built from. "Load report…" — or
+`window.printLayoutDebug.load(report)` from the console — restores the inputs and viewer state.
+
 ## Open questions
 
 - Non-uniform panels (roll-fold inner panel slightly narrower) — needs per-column widths.

@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Plan, Recipe } from '../engine';
+import {
+  logEvent,
+  rounded,
+  type ViewerDebug,
+  type ViewerSnapshot,
+  type ViewerState,
+} from './debugReport';
 import { faceTexture, seamTexture } from '../viewer/faceTexture';
 import { seamStrip } from '../viewer/seams';
 import { buildTimeline, type PageTurn, type Seam, type Timeline } from '../viewer/timeline';
@@ -84,7 +91,30 @@ function disposeTree(root: THREE.Object3D) {
   root.clear();
 }
 
-export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
+interface Three {
+  renderer: THREE.WebGLRenderer;
+  world: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+}
+
+const vec = (v: THREE.Vector3): [number, number, number] => [v.x, v.y, v.z];
+
+export function BookView3D({
+  recipe,
+  plan,
+  debug,
+  restore,
+  onRestored,
+}: {
+  recipe: Recipe;
+  plan: Plan;
+  /** Filled with a handle that snapshots the viewer for bug reports. */
+  debug?: React.RefObject<ViewerDebug | null>;
+  /** Viewer state to restore (from a loaded bug report); `onRestored` fires once applied. */
+  restore?: ViewerState | null;
+  onRestored?: () => void;
+}) {
   const [shape, setShape] = useState(0);
   const aspect = PAGE_SHAPES[shape]!.aspect;
   const built = useMemo((): { tl: Timeline } | { error: string } => {
@@ -115,8 +145,10 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
   const root = useRef<THREE.Group | null>(null);
   const mount = useRef<HTMLDivElement>(null);
   const resetView = useRef<() => void>(() => {});
+  const three = useRef<Three | null>(null);
 
   const setMode = (m: PlayMode) => {
+    if (m !== live.current.mode) logEvent('mode', { mode: m, time: live.current.time });
     live.current.mode = m;
     if (m !== 'paused') live.current.target = null;
     setModeState(m);
@@ -192,6 +224,12 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       e.stopImmediatePropagation();
       e.preventDefault();
       drag = { rank };
+      logEvent('grab', {
+        rank,
+        time: live.current.time,
+        settlingTo: live.current.target,
+        pointer: [onPlane.x, onPlane.y],
+      });
       setMode('paused');
       live.current.target = null;
       const t = pt.grab(live.current.time, rank);
@@ -206,6 +244,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       if (drag && pt) {
         if (!raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
         const t = pt.timeFor(drag.rank, pt.progressAt(onPlane.x, onPlane.y));
+        logEvent('drag', { rank: drag.rank, time: t, pointer: [onPlane.x, onPlane.y] });
         live.current.time = t;
         setTime(t);
       } else if (e.buttons === 0) {
@@ -218,6 +257,11 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       // Let go: the leaf falls to whichever side it is closer to.
       const frac = live.current.time - pt.start - drag.rank;
       live.current.target = pt.start + drag.rank + (frac > 0.5 ? 1 : 0);
+      logEvent('release', {
+        rank: drag.rank,
+        time: live.current.time,
+        settleTo: live.current.target,
+      });
       drag = null;
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       canvas.style.cursor = 'grab';
@@ -229,6 +273,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    three.current = { renderer, world, camera, controls };
     controls.addEventListener('start', () => {
       live.current.autoFrame = false;
       setAutoFrame(false);
@@ -337,6 +382,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       renderer.dispose();
       renderer.domElement.remove();
       root.current = null;
+      three.current = null;
     };
   }, []);
 
@@ -379,13 +425,125 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
     setTime(t);
   }, [tl, plan, recipe, aspect]);
 
+  // ---- Bug reports: restore a reported state, and expose a snapshot of the current one. ----
+  useEffect(() => {
+    if (!restore || !tl) return;
+    if (restore.shape !== shape) {
+      setShape(restore.shape); // the timeline rebuilds, then this runs again
+      return;
+    }
+    const L = live.current;
+    Object.assign(L, {
+      time: Math.min(Math.max(0, restore.time), tl.duration),
+      mode: 'paused',
+      speed: restore.speed,
+      explode: restore.explode,
+      autoFrame: restore.autoFrame,
+      snap: false,
+      target: null,
+    });
+    setModeState('paused');
+    setSpeed(restore.speed);
+    setExplode(restore.explode);
+    setAutoFrame(restore.autoFrame);
+    setTime(L.time);
+    const t3 = three.current;
+    if (t3) {
+      t3.camera.position.fromArray(restore.camera.position);
+      t3.camera.up.fromArray(restore.camera.up);
+      t3.camera.fov = restore.camera.fov;
+      t3.camera.updateProjectionMatrix();
+      t3.controls.target.fromArray(restore.camera.target);
+      t3.controls.update();
+    }
+    logEvent('restored', { time: L.time });
+    onRestored?.();
+  }, [restore, tl, shape, onRestored]);
+
+  useEffect(() => {
+    if (!debug) return;
+    debug.current = {
+      snapshot(): ViewerSnapshot {
+        const L = live.current;
+        const t3 = three.current;
+        const s = scene.current;
+        let screenshot: string | null = null;
+        if (t3) {
+          // Render now so the drawing buffer still holds the frame when it is read back.
+          t3.renderer.render(t3.world, t3.camera);
+          try {
+            screenshot = t3.renderer.domElement.toDataURL('image/png');
+          } catch {
+            screenshot = null;
+          }
+        }
+        const state: ViewerState = {
+          time: L.time,
+          mode: L.mode,
+          speed: L.speed,
+          explode: L.explode,
+          autoFrame: L.autoFrame,
+          shape,
+          camera: t3
+            ? {
+                position: vec(t3.camera.position),
+                target: vec(t3.controls.target),
+                up: vec(t3.camera.up),
+                fov: t3.camera.fov,
+              }
+            : { position: [0, 0, 10], target: [0, 0, 0], up: [0, 1, 0], fov: 35 },
+        };
+        const derived = s
+          ? {
+              stage,
+              settlingTo: L.target,
+              aspect,
+              canvas: t3
+                ? {
+                    css: [t3.renderer.domElement.clientWidth, t3.renderer.domElement.clientHeight],
+                    pixelRatio: t3.renderer.getPixelRatio(),
+                  }
+                : null,
+              timeline: {
+                duration: s.tl.duration,
+                foldedAt: s.tl.foldedAt,
+                leafCount: s.tl.leafCount,
+                readStart: s.tl.pageTurn?.start ?? null,
+                segments: s.tl.segments,
+                stops: s.tl.stops,
+              },
+              spineAxis: s.tl.spineAxisAt(L.time, L.explode),
+              panels: s.tl.panels.map((p, i) => ({
+                ...p,
+                leaf: s.tl.pageTurn?.rankOf(i) ?? null,
+                matrix: s.mats[i]!.elements.slice(),
+              })),
+              seams: s.seams.map((sm) => ({
+                a: sm.seam.a,
+                b: sm.seam.b,
+                spine: sm.seam.spine,
+                cutAt: Number.isFinite(sm.seam.cutAt) ? sm.seam.cutAt : null,
+                visible: sm.mesh.visible,
+              })),
+            }
+          : { error: 'error' in built ? built.error : 'no timeline' };
+        return { state: rounded(state), derived: rounded(derived), screenshot };
+      },
+    };
+    return () => {
+      debug.current = null;
+    };
+  });
+
   // ---- Transport helpers. ----
   const duration = tl?.duration ?? 0;
   const goTo = (t: number) => {
+    logEvent('goTo', { to: t, time: live.current.time });
     setMode('paused');
     live.current.target = Math.min(Math.max(0, t), duration);
   };
   const jump = (t: number) => {
+    logEvent('jump', { to: t, time: live.current.time });
     setMode('paused');
     live.current.target = null;
     live.current.time = t;
@@ -487,7 +645,13 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
         )}
         <label>
           Speed
-          <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
+          <select
+            value={speed}
+            onChange={(e) => {
+              logEvent('speed', { value: Number(e.target.value) });
+              setSpeed(Number(e.target.value));
+            }}
+          >
             <option value={0.35}>Slow</option>
             <option value={1}>Normal</option>
             <option value={2.5}>Fast</option>
@@ -501,12 +665,21 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
             max={30}
             step={0.5}
             value={explode}
-            onChange={(e) => setExplode(Number(e.target.value))}
+            onChange={(e) => {
+              logEvent('explode', { value: Number(e.target.value) });
+              setExplode(Number(e.target.value));
+            }}
           />
         </label>
         <label>
           Page shape
-          <select value={shape} onChange={(e) => setShape(Number(e.target.value))}>
+          <select
+            value={shape}
+            onChange={(e) => {
+              logEvent('shape', { value: Number(e.target.value) });
+              setShape(Number(e.target.value));
+            }}
+          >
             {PAGE_SHAPES.map((s, i) => (
               <option key={s.label} value={i}>
                 {s.label}

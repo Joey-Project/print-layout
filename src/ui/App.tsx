@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPlan,
   builtinRecipes,
@@ -10,6 +10,17 @@ import {
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
 import { BookView3D } from './BookView3D';
+import {
+  isDebugReport,
+  logEvent,
+  recentEvents,
+  REPORT_KIND,
+  rounded,
+  saveReport,
+  type DebugReport,
+  type ViewerDebug,
+  type ViewerState,
+} from './debugReport';
 import { PlanView } from './SheetView';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
@@ -37,6 +48,10 @@ export function App() {
   const [padding, setPadding] = useState<Padding | 'recipe'>('recipe');
   const [hovered, setHovered] = useState<number | null>(null);
   const [view, setView] = useState<'2d' | '3d'>('2d');
+  const viewerDebug = useRef<ViewerDebug | null>(null);
+  const [restore, setRestore] = useState<ViewerState | null>(null);
+  const clearRestore = useCallback(() => setRestore(null), []);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const draft = useMemo(() => parseDraft(text), [text]);
   const active = draft.ok ? draft.recipe : selected;
@@ -54,6 +69,7 @@ export function App() {
   const select = (id: string) => {
     const r = all.find((x) => x.id === id);
     if (!r) return;
+    logEvent('recipe', { id });
     setSelectedId(id);
     setText(pretty(r));
   };
@@ -85,9 +101,121 @@ export function App() {
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
 
+  // ---- Bug reports. ----
+  const buildReport = (note: string): { report: DebugReport; screenshot: string | null } => {
+    const snap = view === '3d' ? (viewerDebug.current?.snapshot() ?? null) : null;
+    const report: DebugReport = {
+      kind: REPORT_KIND,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      note,
+      app: { commit: __APP_COMMIT__, mode: import.meta.env.MODE },
+      env: {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        devicePixelRatio: window.devicePixelRatio,
+        window: [window.innerWidth, window.innerHeight],
+      },
+      input: { selectedId, recipeText: text, recipe: active, pageCount, padding, view },
+      viewer: snap?.state ?? null,
+      derived: {
+        recipeProblems: draft.ok ? [] : draft.problems,
+        plan: plan
+          ? rounded({
+              pageCount: plan.pageCount,
+              slotCount: plan.slotCount,
+              pagesPerSheet: plan.pagesPerSheet,
+              // Per sheet side: "page@col,row" (↻ = printed rotated 180°, – = blank).
+              sheets: plan.sheets.map((sh) => ({
+                front: sh.front.map(
+                  (x) => `${x.page ?? '–'}${x.rotation ? '↻' : ''}@${x.col},${x.row}`,
+                ),
+                back: sh.back.map(
+                  (x) => `${x.page ?? '–'}${x.rotation ? '↻' : ''}@${x.col},${x.row}`,
+                ),
+              })),
+            })
+          : { error: 'error' in planResult ? planResult.error : 'no plan' },
+        viewer: snap?.derived ?? null,
+      },
+      events: recentEvents(),
+    };
+    return { report, screenshot: snap?.screenshot ?? null };
+  };
+
+  const reportBug = () => {
+    const note = window.prompt(
+      'What went wrong? (optional — saved in the report)\n\nThis saves a JSON file with the current state, plus a PNG of the 3D view.',
+      '',
+    );
+    if (note === null) return;
+    const { report, screenshot } = buildReport(note);
+    saveReport(report, screenshot);
+  };
+
+  const applyReport = (report: DebugReport) => {
+    const { input } = report;
+    logEvent('loadReport', { createdAt: report.createdAt });
+    if (all.some((r) => r.id === input.selectedId)) setSelectedId(input.selectedId);
+    setText(input.recipeText);
+    setPageCount(input.pageCount);
+    setPadding(input.padding);
+    setView(input.view);
+    setRestore(input.view === '3d' ? report.viewer : null);
+  };
+
+  const loadReportFile = async (file: File) => {
+    try {
+      const data: unknown = JSON.parse(await file.text());
+      if (!isDebugReport(data)) throw new Error('This is not a Print Layout bug report.');
+      applyReport(data);
+    } catch (e) {
+      window.alert(`Could not load the report: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  // Lets a developer (or an automated browser) load or take a report from the console.
+  const debugApi = useRef({ load: applyReport, take: () => buildReport('') });
+  debugApi.current = { load: applyReport, take: () => buildReport('') };
+  useEffect(() => {
+    const api = {
+      load: (r: unknown) => {
+        if (!isDebugReport(r)) throw new Error('not a Print Layout bug report');
+        debugApi.current.load(r);
+      },
+      take: () => debugApi.current.take(),
+    };
+    (window as unknown as { printLayoutDebug?: typeof api }).printLayoutDebug = api;
+  }, []);
+
   return (
     <div className="app">
       <header>
+        <div className="header-actions">
+          <button
+            onClick={reportBug}
+            title="Save a JSON report and a screenshot to send with a bug"
+          >
+            Report a bug
+          </button>
+          <button
+            onClick={() => fileInput.current?.click()}
+            title="Restore the exact state saved in a bug report"
+          >
+            Load report…
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void loadReportFile(f);
+            }}
+          />
+        </div>
         <h1>Print Layout</h1>
         <p className="muted">
           Pick a binding recipe and a page count to see where every page lands on the printed
@@ -127,7 +255,11 @@ export function App() {
               min={1}
               max={999}
               value={pageCount}
-              onChange={(e) => setPageCount(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              onChange={(e) => {
+                const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                logEvent('pageCount', { value: n });
+                setPageCount(n);
+              }}
             />
           </label>
           <label>
@@ -205,7 +337,13 @@ export function App() {
               {view === '2d' ? (
                 <PlanView plan={plan} hovered={hovered} onHover={setHovered} />
               ) : (
-                <BookView3D recipe={active} plan={plan} />
+                <BookView3D
+                  recipe={active}
+                  plan={plan}
+                  debug={viewerDebug}
+                  restore={restore}
+                  onRestored={clearRestore}
+                />
               )}
             </>
           )
