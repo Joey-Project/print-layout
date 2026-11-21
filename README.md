@@ -1,4 +1,29 @@
-# Codex-Gated Repository Template
+# Print Layout
+
+Preview, verify and generate print imposition for booklets and folded pieces — saddle stitch,
+signatures, accordion, tri-fold, mini zine and your own recipes — in 2D and as an animated 3D
+fold-and-read model. Runs entirely in the browser; nothing is uploaded.
+
+- Live: <https://booklet.mahane.me> (published from `master` by `.github/workflows/pages.yml`)
+- Design and roadmap: [`docs/design.md`](docs/design.md)
+
+```bash
+pnpm install
+pnpm dev        # http://localhost:5173
+pnpm test
+pnpm build      # static site in dist/
+```
+
+### Publishing
+
+Every push to `master` builds the app and force-pushes `dist/` to the `gh-pages` branch, with a
+`CNAME` for the domain set in `PAGES_DOMAIN` in the workflow. One-time setup: Settings → Pages →
+"Deploy from a branch" → `gh-pages` / root, and a DNS `CNAME` record for the domain pointing at
+`joey-project.github.io`.
+
+---
+
+## Repository template notes
 
 This template starts a repository with the Codex review gate v2 workflows on
 the default branch. It also includes a modular CI generator for adding
