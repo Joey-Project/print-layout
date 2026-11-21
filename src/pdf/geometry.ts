@@ -195,6 +195,8 @@ export interface SheetLayout {
   units: Rect[][];
   /** Blank sections on the front, cut off after printing. */
   blanks: Rect[];
+  /** TrimBox and BleedBox for one side: the front's, mirrored on the back like its panels. */
+  boxes(side: 'front' | 'back'): { trim: Rect; bleed: Rect };
   /** Crop and fold marks for one side (an off-centre layout's cut lines mirror on the back). */
   marks(side: 'front' | 'back'): { crop: Segment[]; fold: Segment[] };
   /** Whether back sides are rotated 180° in the PDF (printer turns top ↔ bottom). */
@@ -370,6 +372,7 @@ export function layoutSheets(
     printerFlip,
     cropMarks,
     foldMarks,
+    boxes: sideBoxes(trim, bleedRect, width, height, backRotated),
     marks: sideMarks(cropMarks, foldMarks, width, height, backRotated),
     slugAt,
     warnings,
@@ -432,6 +435,19 @@ function placer(
     );
     return out;
   };
+}
+
+/** A front rectangle as it lies on the back: mirrored, or (turned top ↔ bottom) flipped up/down. */
+function mirrorRect(r: Rect, width: number, height: number, backRotated: boolean): Rect {
+  return backRotated ? { ...r, y: height - r.y - r.h } : { ...r, x: width - r.x - r.w };
+}
+
+function sideBoxes(trim: Rect, bleed: Rect, width: number, height: number, backRotated: boolean) {
+  const back = {
+    trim: mirrorRect(trim, width, height, backRotated),
+    bleed: mirrorRect(bleed, width, height, backRotated),
+  };
+  return (side: 'front' | 'back') => (side === 'front' ? { trim, bleed } : back);
 }
 
 /** Marks for each side: the front's, mirrored (and turned, for a top ↔ bottom flip) on the back. */
@@ -583,6 +599,7 @@ function layoutSections(
     printerFlip,
     cropMarks,
     foldMarks,
+    boxes: sideBoxes(trim, trim, width, height, backRotated),
     marks: sideMarks(cropMarks, foldMarks, width, height, backRotated),
     slugAt: null,
     warnings,

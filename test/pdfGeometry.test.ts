@@ -10,6 +10,7 @@ import {
   type PrintOptions,
 } from '../src/pdf/geometry';
 import { DEFAULT_IMPOSED, proofLayout, type PdfPageInfo } from '../src/pdf/imposed';
+import type { Gang } from '../src/engine';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
 const A5 = { w: 148 * MM, h: 210 * MM };
@@ -479,6 +480,49 @@ describe('proofing an imposed PDF with an asymmetric imposed area', () => {
       // Sheet s is in column s on the front and in the mirrored column on the back.
       expect(front.x).toBeCloseTo(L + s * unitW, 9);
       expect(back.x).toBeCloseTo(L + (1 - s) * unitW, 9);
+    }
+  });
+});
+
+describe('proofing finds the exported panels exactly', () => {
+  const r = recipe('saddle-stitch');
+  const plan = buildPlan(r, 16); // 4 recipe sheets
+  const A6 = { w: 105 * MM, h: 148 * MM };
+  it.each([
+    ['two across', { across: 2, down: 1, order: 'stack' } as Gang, 'auto' as const],
+    ['2 × 2, backs top-to-bottom', { across: 2, down: 2, order: 'stack' } as Gang, 'long' as const],
+  ])('%s, with bleed and a cutting gap', (_n, gang, flip) => {
+    const o = opts('shop', { bleed: 3, gutter: 4, gang, flip });
+    const l = layoutSheets(plan, A6, o);
+    // The exported page as the proofing reads it: the sheet, with the layout's TrimBox.
+    const info: PdfPageInfo = {
+      rotate: 0,
+      crop: { x: 0, y: 0, w: l.width, h: l.height },
+      trim: l.trim,
+      hasTrim: true,
+      unit: 1,
+    };
+    const pages = Array.from({ length: 2 * l.gang.papers }, () => info);
+    const proof = proofLayout(pages, plan, {
+      ...DEFAULT_IMPOSED,
+      backRotated: l.backRotated,
+      gang,
+      gutter: 4,
+      bleed: 3,
+    });
+    for (let paper = 0; paper < l.gang.papers; paper++) {
+      for (const side of ['front', 'back'] as const) {
+        for (const placed of l.place(paper, side)) {
+          const got = proof.region(placed.sheet, side, placed.slot.col, placed.slot.row)!;
+          expect(got.index).toBe(paper * 2 + (side === 'back' ? 1 : 0));
+          // Displayed fractions (y down) back to points (y up).
+          const x = got.rect.x * l.width;
+          const y = l.height - (got.rect.y + got.rect.h) * l.height;
+          expect(x / MM).toBeCloseTo(placed.rect.x / MM, 6);
+          expect(y / MM).toBeCloseTo(placed.rect.y / MM, 6);
+          expect((got.rect.w * l.width) / MM).toBeCloseTo(105, 6);
+        }
+      }
     }
   });
 });

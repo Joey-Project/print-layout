@@ -279,9 +279,9 @@ async function drawSide(
       color: cmyk(0, 0, 0, 1),
     });
   }
-  const t = layout.trim;
+  // An off-centre layout (blank sections) has its boxes where this side's panels are.
+  const { trim: t, bleed: b } = layout.boxes(side);
   page.setTrimBox(t.x, t.y, t.w, t.h);
-  const b = layout.bleed;
   page.setBleedBox(b.x, b.y, b.w, b.h);
   return page;
 }

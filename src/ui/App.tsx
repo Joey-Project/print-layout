@@ -13,7 +13,7 @@ import {
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
 import { sectionPageSize } from '../pdf/geometry';
-import { DEFAULT_IMPOSED, proofSheetCount, type ImposedOptions } from '../pdf/imposed';
+import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../pdf/imposed';
 import { usePdfArt, type LoadedPdf } from './pdfArt';
 import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
 import { SourcePanel } from './SourcePanel';
@@ -73,15 +73,21 @@ export function App() {
   const active = draft.ok ? draft.recipe : (reportRecipe ?? selected);
   const edited = text !== pretty(selected);
 
-  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet.
+  // Proofing: printed sheets × parts per sheet (several per sheet, or sections) = recipe sheets.
+  // Fewer pages fit only while they fill the same printed sheets.
+  const proofRange =
+    pdf?.mode === 'imposed' ? proofSheetRange(pdf.info.length, active.grid, imposed) : null;
+  const proofPagesMax = proofRange ? Math.max(1, proofRange.max) * pagesPerSheet(active) : 0;
+  const proofPagesMin = proofRange
+    ? Math.max(1, (proofRange.min - 1) * pagesPerSheet(active) + 1)
+    : 1;
+  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet,
+  // fewer when the last printed sheets have empty positions.
   const effectivePages = useMemo(() => {
     if (!pdf) return pageCount;
     if (pdf.mode === 'reading') return pdf.info.length;
-    // Printed sheets × parts per sheet (several per sheet, or sections) = recipe sheets.
-    return (
-      Math.max(1, proofSheetCount(pdf.info.length, active.grid, imposed)) * pagesPerSheet(active)
-    );
-  }, [pdf, pageCount, imposed, active]);
+    return Math.max(proofPagesMin, Math.min(proofPagesMax, imposed.pages ?? proofPagesMax));
+  }, [pdf, pageCount, imposed.pages, proofPagesMin, proofPagesMax]);
 
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
     try {
@@ -324,18 +330,26 @@ export function App() {
 
         <div className="row">
           <label>
-            Pages in source PDF
+            {pdf?.mode === 'imposed' ? 'Pages in the book' : 'Pages in source PDF'}
             <input
               type="number"
-              min={1}
-              max={999}
+              min={pdf?.mode === 'imposed' ? proofPagesMin : 1}
+              max={pdf?.mode === 'imposed' ? proofPagesMax : 999}
               value={effectivePages}
-              disabled={pdf !== null}
-              title={pdf ? 'Set by the loaded PDF' : undefined}
+              disabled={pdf?.mode === 'reading'}
+              title={
+                pdf?.mode === 'reading'
+                  ? 'Set by the loaded PDF'
+                  : pdf
+                    ? `${proofPagesMin}–${proofPagesMax}: fewer when the last printed sheets have empty positions`
+                    : undefined
+              }
               onChange={(e) => {
                 const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
                 logEvent('pageCount', { value: n });
-                setPageCount(n);
+                if (pdf?.mode === 'imposed')
+                  setImposed({ ...imposed, pages: n >= proofPagesMax ? undefined : n });
+                else setPageCount(n);
               }}
             />
           </label>
@@ -356,6 +370,8 @@ export function App() {
           onOpen={(p) => {
             logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
             setPdf(p);
+            // A new imposed PDF: every position holds a sheet until told otherwise.
+            if (imposed.pages !== undefined) setImposed({ ...imposed, pages: undefined });
             setView(p.mode === 'imposed' ? '2d' : view);
           }}
           onClose={() => {

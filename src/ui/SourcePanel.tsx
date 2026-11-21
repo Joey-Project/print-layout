@@ -221,7 +221,7 @@ export function SourcePanel({
                     </label>
                   ) : (
                     <label>
-                      Gap (mm)
+                      Cutting gap (mm)
                       <input
                         type="number"
                         min={0}
@@ -237,6 +237,23 @@ export function SourcePanel({
                     </label>
                   )}
                 </div>
+              )}
+              {holds === 'several' && (
+                <label>
+                  Bleed around each (mm)
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={imposed.bleed ?? 0}
+                    onChange={(e) =>
+                      onImposed({ ...imposed, bleed: Math.max(0, Number(e.target.value) || 0) })
+                    }
+                  />
+                  <span className="muted small">
+                    As exported: the parts are twice the bleed plus the cutting gap apart.
+                  </span>
+                </label>
               )}
               {holds !== 'one' && (
                 <label>

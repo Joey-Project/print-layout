@@ -1,6 +1,6 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
-import { DEFAULT_IMPOSED, type ImposedOptions } from '../src/pdf/imposed';
+import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../src/pdf/imposed';
 import {
   decodePDFRawStream,
   PDFArray,
@@ -379,6 +379,16 @@ describe('PDF export and de-imposition round trip', () => {
     const doc = await loadPdf(files[0]!.bytes);
     expect(doc.getPageCount()).toBe(4);
     expect(doc.getPage(0).getWidth() / MM).toBeCloseTo(297, 3);
+    // The boxes follow each side's pages: the left two thirds on the front, the right on the back.
+    for (const [i, x] of [
+      [0, 0],
+      [1, 99],
+    ] as const) {
+      const trim = doc.getPage(i).getTrimBox();
+      expect(trim.x / MM).toBeCloseTo(x, 3);
+      expect(trim.width / MM).toBeCloseTo(198, 3);
+      expect(doc.getPage(i).getBleedBox().x / MM).toBeCloseTo(x, 3);
+    }
     const pages = await visibleNumbers(files[0]!.bytes);
     expect(pages.map((p) => p.sort())).toEqual([
       ['1', '8'],
@@ -455,6 +465,7 @@ describe('PDF export and de-imposition round trip', () => {
           ...proof,
           gang: options.gang,
           gutter: options.gutter,
+          bleed: options.bleed,
           sections: options.sections,
         },
         'test',
@@ -493,5 +504,28 @@ describe('PDF export and de-imposition round trip', () => {
       (await deimposePdf(bytes, plan, { ...DEFAULT_IMPOSED, reversed: true }, 't')).bytes,
     );
     expect(right.map((n) => n.join())).toEqual(Array.from({ length: 12 }, (_, i) => String(i + 1)));
+  });
+
+  it('proofs a sheet whose last printed sheet has an empty position', async () => {
+    // 12 pages two per sheet: three recipe sheets on two printed sheets, one position empty.
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const options = opts('home', { gang: { across: 2, down: 1, order: 'stack' } });
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: { w: 105 * MM, h: 148 * MM },
+      options,
+      baseName: 'test',
+    });
+    const proof = { ...DEFAULT_IMPOSED, gang: options.gang, gutter: options.gutter };
+    expect(proofSheetRange(4, plan.grid, proof)).toEqual({ min: 3, max: 4 });
+    const reading = await visibleNumbers(
+      (await deimposePdf(files[0]!.bytes, plan, proof, 't')).bytes,
+    );
+    expect(reading.map((n) => n.join())).toEqual(
+      Array.from({ length: 12 }, (_, i) => String(i + 1)),
+    );
   });
 });

@@ -113,6 +113,15 @@ interface Three {
 
 const vec = (v: THREE.Vector3): [number, number, number] => [v.x, v.y, v.z];
 
+/** Bounds of the visible meshes under `root` (Box3.setFromObject counts hidden ones too). */
+function visibleBounds(root: THREE.Object3D, out: THREE.Box3) {
+  out.makeEmpty();
+  root.traverseVisible((o) => {
+    if ((o as THREE.Mesh).isMesh) out.expandByObject(o);
+  });
+  return out;
+}
+
 export function BookView3D({
   recipe,
   plan,
@@ -404,7 +413,8 @@ export function BookView3D({
         group.updateMatrixWorld(true);
 
         if ((L.autoFrame || L.snap) && !drag) {
-          box.setFromObject(group);
+          // Only what is shown: cut-off waste and cut seams stay in the group, hidden.
+          visibleBounds(group, box);
           if (!box.isEmpty()) {
             box.getCenter(center);
             box.getSize(size);

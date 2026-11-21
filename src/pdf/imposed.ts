@@ -32,8 +32,15 @@ export interface ImposedOptions {
   reversed?: boolean;
   /** Several recipe sheets per printed sheet, cut apart (cut and stack, or copies). */
   gang?: Gang;
-  /** Gap between those parts, mm. */
+  /** Cutting gap between those parts, mm. */
   gutter?: number;
+  /** Bleed around each part, mm: as exported, parts are 2 × bleed + the cutting gap apart. */
+  bleed?: number;
+  /**
+   * Pages in the book, when the last printed sheets have empty positions (the PDF alone cannot tell
+   * an empty position from a blank sheet). Unset: every position holds a sheet.
+   */
+  pages?: number;
   /** The printed sheet is divided into equal sections, one page each (blank ones cut off). */
   sections?: Sections | null;
 }
@@ -239,9 +246,20 @@ export interface ProofLayout {
 
 /** Recipe sheets an imposed PDF of `pdfPages` pages holds, for these options. */
 export function proofSheetCount(pdfPages: number, grid: Grid, o: ImposedOptions) {
+  return proofSheetRange(pdfPages, grid, o).max;
+}
+
+/**
+ * Recipe sheets an imposed PDF can hold: every position filled (max), down to only the first
+ * position of the last printed sheet (min, cut and stack). Any count in between fills the same
+ * printed sheets, so the PDF maps the same way.
+ */
+export function proofSheetRange(pdfPages: number, grid: Grid, o: ImposedOptions) {
   const printed = sideMap(pdfPages, o.order).sheetCount;
   const units = paperPlan(1, grid, o.gang ?? NO_GANG, o.sections ?? null).gang.units;
-  return (o.gang ?? NO_GANG).order === 'copies' ? printed : printed * units;
+  if ((o.gang ?? NO_GANG).order === 'copies' || printed === 0)
+    return { min: printed, max: printed };
+  return { min: (printed - 1) * units + 1, max: printed * units };
 }
 
 /**
@@ -285,8 +303,9 @@ export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions):
         };
       } else {
         const size = physicalSize(page, page.crop);
-        const gx = ((o.gutter ?? 0) * MM) / size.w;
-        const gy = ((o.gutter ?? 0) * MM) / size.h;
+        const space = (2 * Math.max(0, o.bleed ?? 0) + Math.max(0, o.gutter ?? 0)) * MM;
+        const gx = space / size.w;
+        const gy = space / size.h;
         const uw = (area.w - (across - 1) * gx) / across;
         const uh = (area.h - (down - 1) * gy) / down;
         unit = { x: area.x + ucol * (uw + gx), y: area.y + at.row * (uh + gy), w: uw, h: uh };
