@@ -1,7 +1,15 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
 import { DEFAULT_IMPOSED, type ImposedOptions } from '../src/pdf/imposed';
-import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
+import {
+  decodePDFRawStream,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFNumber,
+  PDFRawStream,
+} from 'pdf-lib';
 import { deimposePdf, exportImposed, loadPdf, pageInfo, placeholderPdf } from '../src/pdf/pdfFiles';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
@@ -286,5 +294,40 @@ describe('PDF export and de-imposition round trip', () => {
       .map((st) => new TextDecoder().decode(decodePDFRawStream(st).decode()))
       .join('\n');
     expect(content).toMatch(/\/CSRegistration CS\s+1 SCN/);
+  });
+  it('sizes pages with a /UserUnit by their physical size', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    // Half-size boxes with /UserUnit 2: physically A5.
+    const doc = await placeholderPdf(8, { w: A5.w / 2, h: A5.h / 2 });
+    for (const p of doc.getPages()) p.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+    const source = await doc.save();
+    const info = pageInfo(await loadPdf(source));
+    expect(info[0]!.unit).toBe(2);
+    const { files, layout } = await exportImposed({
+      plan,
+      recipe: r,
+      source,
+      dummyPageSize: A5,
+      options: opts('shop'),
+      baseName: 'test',
+    });
+    // Exact-size sheet: two A5 pages wide plus 8 mm of marks each side.
+    expect(layout.width / MM).toBeCloseTo(296 + 16, 6);
+    expect(layout.scale).toBe(1);
+    // Cut back up, each page is A5 again and shows its number.
+    const back = await deimposePdf(files[0]!.bytes, plan, DEFAULT_IMPOSED, 'test');
+    const out = await loadPdf(back.bytes);
+    expect(out.getPage(0).getWidth() / MM).toBeCloseTo(148, 3);
+    expect((await visibleNumbers(back.bytes)).map((n) => n.join())).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+    ]);
   });
 });

@@ -31,7 +31,8 @@ export async function renderPage(
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(viewport.width));
   canvas.height = Math.max(1, Math.round(viewport.height));
-  await page.render({ canvas, viewport }).promise;
+  // Print intent: annotations show exactly when they would print (as in the exported sheets).
+  await page.render({ canvas, viewport, intent: 'print' }).promise;
   page.cleanup();
   return canvas;
 }

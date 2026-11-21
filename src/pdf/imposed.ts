@@ -34,6 +34,8 @@ export interface PdfPageInfo {
   trim: Rect;
   /** True when the PDF really defines a TrimBox (not just the fallback to the crop box). */
   hasTrim: boolean;
+  /** The page's /UserUnit: size of one user-space unit in points (usually 1). */
+  unit: number;
 }
 
 export interface SideMap {
@@ -62,6 +64,12 @@ export function sideMap(pdfPages: number, order: ImposedOptions['order']): SideM
 
 /** Normalised clockwise quarter turns of a /Rotate value. */
 const quarters = (rotate: number) => ((Math.round(rotate / 90) % 4) + 4) % 4;
+
+/** Physical size in points of a user-space box as shown on its page (/Rotate and /UserUnit). */
+export function physicalSize(page: { rotate: number; unit: number }, box: Rect) {
+  const s = displayedSize(box, page.rotate);
+  return { w: s.w * page.unit, h: s.h * page.unit };
+}
 
 /** Displayed size of a box on a page with this /Rotate. */
 export function displayedSize(box: Rect, rotate: number) {
@@ -141,7 +149,7 @@ export function imposedArea(page: PdfPageInfo, o: ImposedOptions): Rect {
     o.useTrimBox && page.hasTrim
       ? boxToDisplayed(page.crop, page.rotate, page.trim)
       : { x: 0, y: 0, w: 1, h: 1 };
-  const size = displayedSize(page.crop, page.rotate);
+  const size = physicalSize(page, page.crop);
   const l = (o.inset.left * MM) / size.w;
   const r = (o.inset.right * MM) / size.w;
   const t = (o.inset.top * MM) / size.h;

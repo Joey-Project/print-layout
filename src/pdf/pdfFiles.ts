@@ -40,7 +40,7 @@ import {
   type SheetLayout,
 } from './geometry';
 import {
-  displayedSize,
+  physicalSize,
   displayedToBox,
   imposedArea,
   panelRegion,
@@ -155,11 +155,13 @@ export function pageInfo(doc: PDFDocument): PdfPageInfo[] {
   return doc.getPages().map((p) => {
     const crop = asRect(p.getCropBox());
     const hasTrim = p.node.TrimBox() !== undefined;
+    const unit = num(p.node.get(PDFName.of('UserUnit')));
     return {
       rotate: p.getRotation().angle,
       crop,
       trim: hasTrim ? asRect(p.getTrimBox()) : crop,
       hasTrim,
+      unit: unit && unit > 0 ? unit : 1,
     };
   });
 }
@@ -168,7 +170,7 @@ export function pageInfo(doc: PDFDocument): PdfPageInfo[] {
 export function finishedPageSize(info: PdfPageInfo[]): { w: number; h: number } {
   const first = info[0];
   if (!first) return { w: 148 * MM, h: 210 * MM };
-  return displayedSize(first.trim, first.rotate);
+  return physicalSize(first, first.trim);
 }
 
 /**
@@ -435,7 +437,8 @@ export async function deimposePdf(
       options,
     );
     const box = displayedToBox(pi.crop, pi.rotate, region.rect);
-    const shown = displayedSize(box, pi.rotate);
+    // Keep the physical size: user units are /UserUnit points each.
+    const shown = physicalSize(pi, box);
     // Read it upright: undo the slot's rotation and any back-side turn.
     const upright = (region.turn + at.slot.rotation) % 360;
     const page = out.addPage([shown.w, shown.h]);

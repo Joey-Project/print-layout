@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { MM } from '../pdf/geometry';
-import { displayedSize, type ImposedOptions } from '../pdf/imposed';
+import { physicalSize, type ImposedOptions } from '../pdf/imposed';
 import type { LoadedPdf, PdfArt } from './pdfArt';
 
 /** Open a PDF from disk: page info via pdf-lib, rendering via pdf.js (both loaded on demand). */
@@ -57,8 +57,8 @@ export function SourcePanel({
   const first = pdf?.info[0];
   const size = first
     ? pdf.mode === 'reading'
-      ? displayedSize(first.trim, first.rotate)
-      : displayedSize(first.crop, first.rotate)
+      ? physicalSize(first, first.trim)
+      : physicalSize(first, first.crop)
     : null;
   const inset = imposed.inset;
   const setInset = (k: keyof typeof inset, v: number) =>

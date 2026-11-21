@@ -9,7 +9,7 @@ import {
   type PrintOptions,
   type PrintPreset,
 } from '../pdf/geometry';
-import { displayedSize, type ImposedOptions } from '../pdf/imposed';
+import { physicalSize, type ImposedOptions } from '../pdf/imposed';
 import { logEvent } from './debugReport';
 import type { LoadedPdf } from './pdfArt';
 
@@ -100,7 +100,7 @@ export function PrintView({
   const source = pdf?.mode === 'reading' ? pdf : null;
   const pageSize = useMemo(() => {
     const first = source?.info[0];
-    return first ? displayedSize(first.trim, first.rotate) : dummySize(settings.dummyPage);
+    return first ? physicalSize(first, first.trim) : dummySize(settings.dummyPage);
   }, [source, settings.dummyPage]);
   const layout = useMemo(() => layoutSheets(plan, pageSize, o), [plan, pageSize, o]);
   const sheetCount = plan.sheets.length;
