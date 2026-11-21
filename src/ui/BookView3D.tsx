@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Plan, Recipe } from '../engine';
 import { faceTexture } from '../viewer/faceTexture';
-import { buildTimeline, type Timeline } from '../viewer/timeline';
+import { buildTimeline, type PageTurn, type Timeline } from '../viewer/timeline';
 
 const PAGE_SHAPES = [
   { label: 'A-series portrait', aspect: Math.SQRT2 },
@@ -130,26 +130,31 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       const pt = scene.current?.tl.pageTurn;
       return pt && live.current.time >= pt.start - 1e-6 ? pt : null;
     };
+    /** The leaf rank of the front-most panel under the pointer, if any. */
+    const leafUnderPointer = (pt: PageTurn) => {
+      const hit = raycaster.intersectObject(group, true)[0];
+      if (!hit) return null;
+      const panel = hit.object.parent?.userData.panel as number | undefined;
+      return (panel === undefined ? undefined : pt.rankOf(panel)) ?? null;
+    };
     const overBook = () => raycaster.intersectObject(group, true).length > 0;
     const onDown = (e: PointerEvent) => {
       const pt = turnable();
       if (e.button !== 0 || !pt) return;
       aim(e);
-      if (!overBook() || !raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
-      const along = live.current.time - pt.start;
-      let rank: number;
-      if (Math.abs(along - Math.round(along)) > 1e-3) {
-        rank = Math.floor(along); // grab the leaf that is already mid-turn
-      } else {
-        const turned = Math.round(along);
-        rank = pt.progressAt(onPlane.x, onPlane.y) < 0.5 ? turned : turned - 1;
-      }
+      // Grab the leaf actually under the pointer — not whichever leaf is still settling from the
+      // last release, which is what made a quick second flip snap back to the previous page.
+      const rank = leafUnderPointer(pt);
+      if (rank === null || !raycaster.ray.intersectPlane(bookPlane, onPlane)) return;
       if (rank < 0 || rank >= pt.leafCount) return;
       e.stopImmediatePropagation();
       e.preventDefault();
       drag = { rank };
       setMode('paused');
       live.current.target = null;
+      const t = pt.grab(live.current.time, rank);
+      live.current.time = t;
+      setTime(t);
       canvas.setPointerCapture(e.pointerId);
       canvas.style.cursor = 'grabbing';
     };
@@ -284,7 +289,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
     scene.current = null;
     if (!tl) return;
     const { cols } = recipe.grid;
-    const groups = tl.panels.map((p) => {
+    const groups = tl.panels.map((p, i) => {
       const g = new THREE.Group();
       g.matrixAutoUpdate = false;
       const cx = p.col + 0.5;
@@ -301,6 +306,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
         new THREE.MeshLambertMaterial({ map: faceTexture(backSlot, p.sheet, 'back', aspect) }),
       );
       g.add(front, back);
+      g.userData.panel = i;
       group.add(g);
       return g;
     });

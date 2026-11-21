@@ -39,6 +39,14 @@ export interface PageTurn {
   progressAt(x: number, y: number): number;
   /** Timeline time showing leaf `rank` turned by `progress` (inverse of the easing). */
   timeFor(rank: number, progress: number): number;
+  /** Which leaf (0 = first turned) a panel belongs to. */
+  rankOf(panel: number): number | undefined;
+  /**
+   * Time to continue from when leaf `rank` is grabbed at `time`. Only one leaf can be mid-turn at
+   * once, so any other leaf still in flight (e.g. settling after a quick release) lands on the side it
+   * would rest on, and the grabbed leaf keeps its current position.
+   */
+  grab(time: number, rank: number): number;
 }
 
 export interface Timeline {
@@ -298,6 +306,8 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
         return Math.acos(Math.min(1, Math.max(-1, d))) / Math.PI;
       },
       timeFor: (rank, progress) => read.start + rank + unsmooth(progress),
+      rankOf: (panel) => leafRank.get(panel),
+      grab: (time, rank) => Math.min(Math.max(time, read.start + rank), read.start + rank + 1),
     };
   }
 

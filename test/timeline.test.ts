@@ -125,6 +125,26 @@ describe('3D timeline agrees with the 2D plan', () => {
     }
   });
 
+  it('grabbing the next page while the last one settles lands the last one first', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const tl = buildTimeline(r, plan, ASPECT);
+    const turn = tl.pageTurn!;
+    // Every panel is one leaf; the cover (pages 1/2) is turned first.
+    const ranks = tl.panels.map((_, i) => turn.rankOf(i));
+    expect(new Set(ranks).size).toBe(turn.leafCount);
+    // Leaf 3 (pages 7/8) was released 60% turned and is still falling to the left.
+    const settling = turn.start + 3.6;
+    // Grabbing leaf 4 (page 9) from the right: leaf 3 finishes its turn, leaf 4 starts flat.
+    expect(turn.grab(settling, 4)).toBe(turn.start + 4);
+    const { left, right } = piles(plan, turn.grab(settling, 4), r, 1);
+    expect(left?.position).toBe(8);
+    expect(right?.position).toBe(9);
+    // Catching leaf 3 itself keeps it where it is; grabbing leaf 2 sends leaf 3 back to the right.
+    expect(turn.grab(settling, 3)).toBe(settling);
+    expect(turn.grab(settling, 2)).toBe(turn.start + 3);
+  });
+
   it('builds fold-only timelines for sequence recipes', () => {
     const r = recipe('tri-fold-roll');
     const tl = buildTimeline(r, buildPlan(r, 6), ASPECT);
