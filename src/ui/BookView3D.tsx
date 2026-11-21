@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { Plan, Recipe } from '../engine';
+import type { Plan, Recipe, Slot } from '../engine';
+import type { PanelArt } from './pdfArt';
 import {
   logEvent,
   rounded,
@@ -44,9 +45,19 @@ interface SeamMesh {
   positions: THREE.BufferAttribute;
 }
 
+interface FaceMesh {
+  mesh: THREE.Mesh;
+  slot: Slot | undefined;
+  sheet: number;
+  side: 'front' | 'back';
+  col: number;
+  row: number;
+}
+
 interface SceneState {
   tl: Timeline;
   groups: THREE.Group[];
+  faces: FaceMesh[];
   seams: SeamMesh[];
   mats: THREE.Matrix4[];
 }
@@ -106,17 +117,31 @@ export function BookView3D({
   debug,
   restore,
   onRestored,
+  art = null,
+  artVersion = 0,
+  pdfAspect = null,
 }: {
   recipe: Recipe;
   plan: Plan;
+  /** Page artwork from a loaded PDF (null: numbered placeholders). */
+  art?: PanelArt | null;
+  /** Changes whenever more artwork is available. */
+  artVersion?: number;
+  /** Page height / width of the loaded PDF; offered as the "From PDF" page shape. */
+  pdfAspect?: number | null;
   /** Filled with a handle that snapshots the viewer for bug reports. */
   debug?: React.RefObject<ViewerDebug | null>;
   /** Viewer state to restore (from a loaded bug report); `onRestored` fires once applied. */
   restore?: ViewerState | null;
   onRestored?: () => void;
 }) {
-  const [shape, setShape] = useState(0);
-  const aspect = PAGE_SHAPES[shape]!.aspect;
+  // Page shape: an index into PAGE_SHAPES, or -1 for the loaded PDF's own shape.
+  const [shape, setShape] = useState(pdfAspect ? -1 : 0);
+  useEffect(() => {
+    if (pdfAspect) setShape(-1);
+    else setShape((s) => (s === -1 ? 0 : s));
+  }, [pdfAspect]);
+  const aspect = shape === -1 && pdfAspect ? pdfAspect : PAGE_SHAPES[Math.max(0, shape)]!.aspect;
   const built = useMemo((): { tl: Timeline } | { error: string } => {
     try {
       return { tl: buildTimeline(recipe, plan, aspect) };
@@ -146,6 +171,9 @@ export function BookView3D({
   const mount = useRef<HTMLDivElement>(null);
   const resetView = useRef<() => void>(() => {});
   const three = useRef<Three | null>(null);
+  /** The artwork function and image each face was last drawn with. */
+  const artApplied = useRef<PanelArt | null>(null);
+  const artSeen = useRef(new Map<THREE.Mesh, unknown>());
 
   const setMode = (m: PlayMode) => {
     if (m !== live.current.mode) logEvent('mode', { mode: m, time: live.current.time });
@@ -426,6 +454,7 @@ export function BookView3D({
     scene.current = null;
     if (!tl) return;
     const { cols } = recipe.grid;
+    const faces: FaceMesh[] = [];
     const groups = tl.panels.map((p, i) => {
       const g = new THREE.Group();
       g.matrixAutoUpdate = false;
@@ -434,13 +463,34 @@ export function BookView3D({
       const sheet = plan.sheets[p.sheet]!;
       const frontSlot = sheet.front.find((s) => s.col === p.col && s.row === p.row);
       const backSlot = sheet.back.find((s) => s.col === cols - 1 - p.col && s.row === p.row);
+      const backCol = cols - 1 - p.col;
       const front = new THREE.Mesh(
         new THREE.PlaneGeometry(1, aspect).translate(cx, cy, 0.0015),
-        new THREE.MeshLambertMaterial({ map: faceTexture(frontSlot, p.sheet, 'front', aspect) }),
+        new THREE.MeshLambertMaterial({
+          map: faceTexture(
+            frontSlot,
+            p.sheet,
+            'front',
+            aspect,
+            art?.(p.sheet, 'front', p.col, p.row),
+          ),
+        }),
       );
       const back = new THREE.Mesh(
         new THREE.PlaneGeometry(1, aspect).rotateY(Math.PI).translate(cx, cy, -0.0015),
-        new THREE.MeshLambertMaterial({ map: faceTexture(backSlot, p.sheet, 'back', aspect) }),
+        new THREE.MeshLambertMaterial({
+          map: faceTexture(
+            backSlot,
+            p.sheet,
+            'back',
+            aspect,
+            art?.(p.sheet, 'back', backCol, p.row),
+          ),
+        }),
+      );
+      faces.push(
+        { mesh: front, slot: frontSlot, sheet: p.sheet, side: 'front', col: p.col, row: p.row },
+        { mesh: back, slot: backSlot, sheet: p.sheet, side: 'back', col: backCol, row: p.row },
       );
       g.add(front, back);
       g.userData.panel = i;
@@ -449,13 +499,36 @@ export function BookView3D({
     });
     const seams = tl.seams.map((seam) => seamMesh(seam, tl.panels[seam.a]!.sheet));
     for (const sm of seams) group.add(sm.mesh);
-    scene.current = { tl, groups, seams, mats: tl.panels.map(() => new THREE.Matrix4()) };
+    scene.current = { tl, groups, faces, seams, mats: tl.panels.map(() => new THREE.Matrix4()) };
+    artApplied.current = art;
+    artSeen.current = new Map(
+      faces.map((f) => [f.mesh, art?.(f.sheet, f.side, f.col, f.row) ?? null] as const),
+    );
     const t = Math.min(live.current.time, tl.duration);
     live.current.time = t;
     live.current.target = null;
     live.current.snap = true;
     setTime(t);
+    // Artwork that arrives later is swapped in by the effect below; a rebuild only follows the
+    // timeline (so it does not reset time or camera as pages render).
   }, [tl, plan, recipe, aspect]);
+
+  // ---- Swap in page artwork as it renders, without rebuilding (keeps the camera and time). ----
+  useEffect(() => {
+    const s = scene.current;
+    if (!s) return;
+    if (artApplied.current !== art) artSeen.current = new Map();
+    artApplied.current = art;
+    for (const f of s.faces) {
+      const image = art?.(f.sheet, f.side, f.col, f.row) ?? null;
+      if (artSeen.current.get(f.mesh) === image) continue;
+      artSeen.current.set(f.mesh, image);
+      const mat = f.mesh.material as THREE.MeshLambertMaterial;
+      mat.map?.dispose();
+      mat.map = faceTexture(f.slot, f.sheet, f.side, aspect, image);
+      mat.needsUpdate = true;
+    }
+  }, [art, artVersion, aspect, tl]);
 
   // ---- Bug reports: restore a reported state, and expose a snapshot of the current one. ----
   useEffect(() => {
@@ -715,6 +788,7 @@ export function BookView3D({
               setShape(Number(e.target.value));
             }}
           >
+            {pdfAspect && <option value={-1}>From PDF</option>}
             {PAGE_SHAPES.map((s, i) => (
               <option key={s.label} value={i}>
                 {s.label}

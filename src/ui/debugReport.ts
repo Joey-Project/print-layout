@@ -4,6 +4,8 @@
  * "Load report…" (or `window.printLayoutDebug.load(report)`) puts the app back in that state.
  */
 import type { Padding, Recipe } from '../engine';
+import type { ImposedOptions } from '../pdf/imposed';
+import type { PrintSettings } from './PrintView';
 
 export const REPORT_KIND = 'print-layout/debug-report';
 
@@ -55,7 +57,11 @@ export interface DebugReport {
     recipe: Recipe;
     pageCount: number;
     padding: Padding | 'recipe';
-    view: '2d' | '3d';
+    view: '2d' | '3d' | 'print';
+    /** Print-export settings (absent in older reports). */
+    print?: PrintSettings;
+    /** How an imposed PDF is read (absent in older reports). */
+    imposed?: ImposedOptions;
   };
   viewer: ViewerState | null;
   derived: Record<string, unknown>;

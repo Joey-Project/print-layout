@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPlan,
   builtinRecipes,
+  pagesPerSheet,
   ImpositionError,
   recipeProblems,
   type Padding,
@@ -9,6 +10,10 @@ import {
   type Recipe,
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
+import { DEFAULT_IMPOSED, sideMap, type ImposedOptions } from '../pdf/imposed';
+import { usePdfArt, type LoadedPdf } from './pdfArt';
+import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
+import { SourcePanel } from './SourcePanel';
 import { BookView3D } from './BookView3D';
 import {
   isDebugReport,
@@ -52,7 +57,10 @@ export function App() {
   const [pageCount, setPageCount] = useState(12);
   const [padding, setPadding] = useState<Padding | 'recipe'>('recipe');
   const [hovered, setHovered] = useState<number | null>(null);
-  const [view, setView] = useState<'2d' | '3d'>('2d');
+  const [view, setView] = useState<'2d' | '3d' | 'print'>('2d');
+  const [pdf, setPdf] = useState<LoadedPdf | null>(null);
+  const [imposed, setImposed] = useState<ImposedOptions>(DEFAULT_IMPOSED);
+  const [print, setPrint] = useState<PrintSettings>(DEFAULT_PRINT);
   const viewerDebug = useRef<ViewerDebug | null>(null);
   const [restore, setRestore] = useState<ViewerState | null>(null);
   const clearRestore = useCallback(() => setRestore(null), []);
@@ -62,14 +70,21 @@ export function App() {
   const active = draft.ok ? draft.recipe : (reportRecipe ?? selected);
   const edited = text !== pretty(selected);
 
+  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet.
+  const effectivePages = useMemo(() => {
+    if (!pdf) return pageCount;
+    if (pdf.mode === 'reading') return pdf.info.length;
+    return Math.max(1, sideMap(pdf.info.length, imposed.order).sheetCount) * pagesPerSheet(active);
+  }, [pdf, pageCount, imposed.order, active]);
+
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
     try {
       const recipe = padding === 'recipe' ? active : { ...active, padding };
-      return { plan: buildPlan(recipe, pageCount) };
+      return { plan: buildPlan(recipe, effectivePages) };
     } catch (e) {
       return { error: e instanceof ImpositionError ? e.message : String(e) };
     }
-  }, [active, pageCount, padding]);
+  }, [active, effectivePages, padding]);
 
   const select = (id: string) => {
     const r = all.find((x) => x.id === id);
@@ -107,6 +122,7 @@ export function App() {
 
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
+  const pdfArt = usePdfArt(pdf, plan, imposed);
 
   // ---- Bug reports. ----
   const buildReport = (note: string): { report: DebugReport; screenshot: string | null } => {
@@ -123,10 +139,21 @@ export function App() {
         devicePixelRatio: window.devicePixelRatio,
         window: [window.innerWidth, window.innerHeight],
       },
-      input: { selectedId, recipeText: text, recipe: active, pageCount, padding, view },
+      input: {
+        selectedId,
+        recipeText: text,
+        recipe: active,
+        pageCount,
+        padding,
+        view,
+        print,
+        imposed,
+      },
       viewer: snap?.state ?? null,
       derived: {
         recipeProblems: draft.ok ? [] : draft.problems,
+        // The PDF itself is not included; load the same file to reproduce.
+        pdf: pdf ? rounded({ name: pdf.name, mode: pdf.mode, pages: pdf.info }) : null,
         plan: plan
           ? rounded({
               pageCount: plan.pageCount,
@@ -169,6 +196,8 @@ export function App() {
     setPageCount(input.pageCount);
     setPadding(input.padding);
     setView(input.view);
+    if (input.print) setPrint(input.print);
+    if (input.imposed) setImposed(input.imposed);
     setRestore(input.view === '3d' ? report.viewer : null);
   };
 
@@ -262,7 +291,9 @@ export function App() {
               type="number"
               min={1}
               max={999}
-              value={pageCount}
+              value={effectivePages}
+              disabled={pdf !== null}
+              title={pdf ? 'Set by the loaded PDF' : undefined}
               onChange={(e) => {
                 const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
                 logEvent('pageCount', { value: n });
@@ -279,6 +310,26 @@ export function App() {
             </select>
           </label>
         </div>
+
+        <SourcePanel
+          pdf={pdf}
+          art={pdfArt}
+          imposed={imposed}
+          onOpen={(p) => {
+            logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
+            setPdf(p);
+            setView(p.mode === 'imposed' ? '2d' : view);
+          }}
+          onClose={() => {
+            logEvent('closePdf');
+            void pdf?.js.loadingTask.destroy();
+            setPdf(null);
+          }}
+          onImposed={(o) => {
+            logEvent('imposedOptions', { ...o });
+            setImposed(o);
+          }}
+        />
 
         <details open className="editor">
           <summary>Recipe JSON {edited && <span className="badge">edited</span>}</summary>
@@ -341,9 +392,34 @@ export function App() {
                 <button role="tab" aria-selected={view === '3d'} onClick={() => setView('3d')}>
                   Fold &amp; read (3D)
                 </button>
+                <button
+                  role="tab"
+                  aria-selected={view === 'print'}
+                  onClick={() => setView('print')}
+                >
+                  {pdf?.mode === 'imposed' ? 'Reading-order PDF' : 'Print PDF'}
+                </button>
               </div>
               {view === '2d' ? (
-                <PlanView plan={plan} hovered={hovered} onHover={setHovered} />
+                <PlanView
+                  plan={plan}
+                  hovered={hovered}
+                  onHover={setHovered}
+                  pdfArt={pdfArt}
+                  showReading={pdf?.mode === 'imposed'}
+                />
+              ) : view === 'print' ? (
+                <PrintView
+                  plan={plan}
+                  recipe={active}
+                  pdf={pdf}
+                  imposed={imposed}
+                  settings={print}
+                  onSettings={(s) => {
+                    logEvent('printSettings', { ...s.options });
+                    setPrint(s);
+                  }}
+                />
               ) : (
                 <BookView3D
                   recipe={active}
@@ -351,6 +427,9 @@ export function App() {
                   debug={viewerDebug}
                   restore={restore}
                   onRestored={clearRestore}
+                  art={pdfArt?.art ?? null}
+                  artVersion={pdfArt?.version ?? 0}
+                  pdfAspect={pdfArt?.aspect ?? null}
                 />
               )}
             </>

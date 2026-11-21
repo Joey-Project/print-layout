@@ -5,15 +5,19 @@ import type { Slot } from '../engine';
 export const sheetHue = (sheet: number) => (sheet * 137.508 + 20) % 360;
 
 /**
- * Placeholder page artwork: the page number drawn upright in the finished piece (i.e. rotated by
- * the slot's rotation on the sheet), framed in the sheet's colour. PDF thumbnails replace this later.
+ * Page artwork for one face of a panel, as printed on that sheet side. With `image` (from the
+ * loaded PDF, already turned as printed) it is drawn edge to edge inside a thin frame in the
+ * sheet's colour. Without it, a placeholder: the page number upright in the finished piece (i.e.
+ * rotated by the slot's rotation on the sheet), framed in the sheet's colour.
  */
 export function faceTexture(
   slot: Slot | undefined,
   sheet: number,
   sideLabel: string,
   aspect: number,
+  image: CanvasImageSource | null = null,
 ): CanvasTexture {
+  if (image) return imageTexture(image, sheet, aspect);
   const w = 256;
   const h = Math.round(w * aspect);
   const canvas = document.createElement('canvas');
@@ -78,5 +82,24 @@ export function seamTexture(sheet: number, length: number): CanvasTexture {
   ctx.fillRect(0, h - band, 4, band);
   const tex = new CanvasTexture(canvas);
   tex.colorSpace = SRGBColorSpace;
+  return tex;
+}
+
+function imageTexture(image: CanvasImageSource, sheet: number, aspect: number): CanvasTexture {
+  const w = 384;
+  const h = Math.round(w * aspect);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(image, 0, 0, w, h);
+  ctx.strokeStyle = `hsl(${sheetHue(sheet)} 55% 55%)`;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, w - 6, h - 6);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  tex.anisotropy = 4;
   return tex;
 }

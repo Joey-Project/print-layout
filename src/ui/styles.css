@@ -257,8 +257,25 @@ main {
   font-weight: 500;
   color: var(--muted);
 }
+.panel .art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.page-no.on-art {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--paper) 85%, transparent);
+  color: var(--text);
+}
 .pos {
   position: absolute;
+  z-index: 1;
   bottom: 4px;
   right: 6px;
   font-size: 10px;
@@ -379,4 +396,157 @@ main {
   flex-direction: row;
   align-items: center;
   gap: 6px;
+}
+
+.reading-strip .reading-pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.reading-pages figure {
+  margin: 0;
+  width: 72px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.reading-pages figure.hot {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.reading-pages .art {
+  display: block;
+  width: 72px;
+  height: calc(72px * var(--page-aspect, 1.414));
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.reading-pages .art.pending {
+  background: var(--blank);
+}
+
+/* ---- Artwork (PDF) panel ---- */
+.source {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.source h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.source p {
+  margin: 6px 0;
+}
+.source .buttons {
+  flex-wrap: wrap;
+}
+.source .file {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+.imposed-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.insets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px 8px;
+  margin: 0;
+}
+.insets legend {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.insets label {
+  font-size: 11px;
+  font-weight: 400;
+}
+.insets input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* ---- Print tab ---- */
+.print {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.preset {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+}
+.preset[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.print-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px 16px;
+  align-items: end;
+}
+.print-summary p {
+  margin: 4px 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.warning {
+  color: var(--accent);
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+}
+.previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.previews figure {
+  margin: 0;
+  flex: 1 1 280px;
+  max-width: 560px;
+}
+.previews figcaption {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.sheet-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.18);
 }
