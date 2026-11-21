@@ -203,4 +203,54 @@ describe('PDF export and de-imposition round trip', () => {
     expect(reading[6]).toEqual([]);
     expect(reading[7]).toEqual(['8']);
   });
+  it('keeps filled form fields and printable annotations', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const dummy = await placeholderPdf(8, A5);
+    const doc = await PDFDocument.create();
+    const copied = await doc.copyPages(dummy, [0, 1, 2, 3, 4, 5, 6, 7]);
+    // Page 1: nothing in its content, only a printable stamp whose appearance shows "1".
+    const stampArt = await doc.embedPage(copied[0]!);
+    // Page 2: only a filled form field showing "2".
+    copied.forEach((p, i) => {
+      if (i === 0 || i === 1) doc.addPage([A5.w, A5.h]);
+      else doc.addPage(p);
+    });
+    const stamp = doc.context.obj({
+      Type: 'Annot',
+      Subtype: 'Stamp',
+      Rect: [0, 0, A5.w, A5.h],
+      F: 4,
+      AP: { N: stampArt.ref },
+    });
+    doc.getPage(0).node.addAnnot(doc.context.register(stamp));
+    // A hidden stamp must not print.
+    const hidden = doc.context.obj({
+      Type: 'Annot',
+      Subtype: 'Stamp',
+      Rect: [0, 0, A5.w, A5.h],
+      F: 4 | 2,
+      AP: { N: (await doc.embedPage(copied[6]!)).ref },
+    });
+    doc.getPage(0).node.addAnnot(doc.context.register(hidden));
+    const field = doc.getForm().createTextField('page2');
+    field.setText('2');
+    field.addToPage(doc.getPage(1), { x: 40, y: 200, width: 200, height: 120 });
+    field.setFontSize(80);
+    expect(doc.getPage(0).node.Contents()).toBeUndefined();
+    const source = await doc.save();
+
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source,
+      dummyPageSize: A5,
+      options: opts('home'),
+      baseName: 'test',
+    });
+    const shown = (await visibleNumbers(files[0]!.bytes)).flat();
+    expect(shown).toContain('1');
+    expect(shown).toContain('2');
+    expect(shown.filter((x) => x === '7')).toHaveLength(1); // page 7 itself, not the hidden stamp
+  });
 });

@@ -219,9 +219,10 @@ export function layoutSheets(
     const short = Math.min(size.w, size.h);
     const long = Math.max(size.w, size.h);
     const margin = Math.max(0, o.margin) * MM;
+    // Bleed, marks and labels must print too, so they go inside the printer's margin.
     const room = (w: number, h: number) => ({
-      w: w - 2 * Math.max(margin, reserve),
-      h: h - 2 * Math.max(margin, reserve),
+      w: w - 2 * (margin + reserve),
+      h: h - 2 * (margin + reserve),
     });
     const fitScale = (w: number, h: number) => {
       const r = room(w, h);

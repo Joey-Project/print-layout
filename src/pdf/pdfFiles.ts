@@ -5,12 +5,23 @@
  */
 import {
   cmyk,
+  concatTransformationMatrix,
   degrees,
+  drawObject,
+  grayscale,
+  PDFArray,
+  PDFDict,
   PDFDocument,
+  PDFName,
+  PDFNumber,
+  type PDFObject,
   type PDFPage,
+  PDFRef,
+  PDFStream,
+  popGraphicsState,
+  pushGraphicsState,
   StandardFonts,
   type PDFFont,
-  grayscale,
 } from 'pdf-lib';
 import type { Plan, Recipe } from '../engine';
 import {
@@ -41,6 +52,98 @@ const asRect = (b: { x: number; y: number; width: number; height: number }): Rec
 
 export async function loadPdf(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+}
+
+/** Annotation flags (PDF 32000, 12.5.3). */
+const ANNOT_HIDDEN = 2;
+const ANNOT_PRINT = 4;
+
+/**
+ * Bake what would print into each page's own content, so embedding a page (which carries only its
+ * content stream) keeps it: filled form fields, then every other annotation that is set to print
+ * and has an appearance (stamps, highlights, signatures, free text…). pdf.js shows these in the
+ * preview, so without this they would silently vanish from the exported sheets.
+ */
+export function flattenForPrint(doc: PDFDocument) {
+  try {
+    const form = doc.getForm();
+    if (form.getFields().length > 0) {
+      try {
+        form.flatten();
+      } catch {
+        // Values the standard fonts cannot draw: keep the appearances the PDF already has.
+        form.flatten({ updateFieldAppearances: false });
+      }
+    }
+  } catch {
+    // A broken form: its widgets are still handled as plain annotations below.
+  }
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const annot = doc.context.lookupMaybe(annots.get(i), PDFDict);
+      if (annot) drawAppearance(doc, page, annot);
+    }
+  }
+}
+
+const num = (o: PDFObject | undefined) => (o instanceof PDFNumber ? o.asNumber() : undefined);
+
+function drawAppearance(doc: PDFDocument, page: PDFPage, annot: PDFDict) {
+  const flags = num(annot.lookup(PDFName.of('F'))) ?? 0;
+  if (!(flags & ANNOT_PRINT) || flags & ANNOT_HIDDEN) return;
+  const ap = annot.lookupMaybe(PDFName.of('AP'), PDFDict);
+  let normal = ap?.get(PDFName.of('N'));
+  // Appearance states (check boxes…): pick the one named by /AS.
+  const states = normal ? doc.context.lookup(normal) : undefined;
+  if (states instanceof PDFDict && !(states instanceof PDFStream)) {
+    const as = annot.lookup(PDFName.of('AS'));
+    normal = as instanceof PDFName ? states.get(as) : undefined;
+  }
+  if (!normal) return;
+  const ref = normal instanceof PDFRef ? normal : doc.context.register(normal);
+  const stream = doc.context.lookupMaybe(ref, PDFStream);
+  const rect = annot.lookupMaybe(PDFName.of('Rect'), PDFArray);
+  if (!stream || !rect || rect.size() < 4) return;
+  const [rx1, ry1, rx2, ry2] = [0, 1, 2, 3].map((k) => num(rect.lookup(k)) ?? 0) as [
+    number,
+    number,
+    number,
+    number,
+  ];
+  const bboxArr = stream.dict.lookupMaybe(PDFName.of('BBox'), PDFArray);
+  const bbox = bboxArr ? [0, 1, 2, 3].map((k) => num(bboxArr.lookup(k)) ?? 0) : [0, 0, 1, 1];
+  const matArr = stream.dict.lookupMaybe(PDFName.of('Matrix'), PDFArray);
+  const [a, b, c, d, e, f] = matArr
+    ? [0, 1, 2, 3, 4, 5].map((k) => num(matArr.lookup(k)) ?? 0)
+    : [1, 0, 0, 1, 0, 0];
+  // PDF 32000 12.5.5: transform the BBox by the form's Matrix, then map that box onto Rect.
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [x, y] of [
+    [bbox[0]!, bbox[1]!],
+    [bbox[2]!, bbox[1]!],
+    [bbox[0]!, bbox[3]!],
+    [bbox[2]!, bbox[3]!],
+  ] as const) {
+    xs.push(a! * x + c! * y + e!);
+    ys.push(b! * x + d! * y + f!);
+  }
+  const bw = Math.max(...xs) - Math.min(...xs);
+  const bh = Math.max(...ys) - Math.min(...ys);
+  if (bw <= 0 || bh <= 0) return;
+  const sx = (Math.max(rx1, rx2) - Math.min(rx1, rx2)) / bw;
+  const sy = (Math.max(ry1, ry2) - Math.min(ry1, ry2)) / bh;
+  const tx = Math.min(rx1, rx2) - Math.min(...xs) * sx;
+  const ty = Math.min(ry1, ry2) - Math.min(...ys) * sy;
+  const name = page.node.newXObject('FlatAnnot', ref);
+  page.pushOperators(
+    pushGraphicsState(),
+    concatTransformationMatrix(sx, 0, 0, sy, tx, ty),
+    drawObject(name),
+    popGraphicsState(),
+  );
 }
 
 /** /Rotate and boxes of every page. */
@@ -220,6 +323,7 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const src = await loadPdf(
     input.source ?? (await (await placeholderPdf(plan.pageCount, input.dummyPageSize)).save()),
   );
+  flattenForPrint(src);
   const info = pageInfo(src);
   const pageSize = input.source ? finishedPageSize(info) : input.dummyPageSize;
   const layout = layoutSheets(plan, pageSize, options);
@@ -273,6 +377,7 @@ export async function deimposePdf(
   baseName: string,
 ): Promise<ExportFile> {
   const src = await loadPdf(imposed);
+  flattenForPrint(src);
   const info = pageInfo(src);
   const sides = sideMap(info.length, options.order);
   const out = await PDFDocument.create();

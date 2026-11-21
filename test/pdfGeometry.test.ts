@@ -110,6 +110,28 @@ describe('sheet layout', () => {
     }
   });
 
+  it('keeps bleed, marks and labels inside the printer margin', () => {
+    for (const extra of [
+      { cropMarks: true },
+      { cropMarks: true, foldMarks: true, slug: true, bleed: 3 },
+      { slug: true },
+    ]) {
+      const l = layoutSheets(plan, A5, opts('home', extra));
+      const margin = 5 * MM;
+      const inside = (x: number, y: number) =>
+        x >= margin - 1e-9 &&
+        y >= margin - 1e-9 &&
+        x <= l.width - margin + 1e-9 &&
+        y <= l.height - margin + 1e-9;
+      for (const m of [...l.cropMarks, ...l.foldMarks]) {
+        expect(inside(m.x1, m.y1) && inside(m.x2, m.y2)).toBe(true);
+      }
+      expect(inside(l.bleed.x, l.bleed.y)).toBe(true);
+      expect(inside(l.bleed.x + l.bleed.w, l.bleed.y + l.bleed.h)).toBe(true);
+      if (l.slugAt) expect(inside(l.slugAt.x, l.slugAt.y)).toBe(true);
+    }
+  });
+
   it('warns when 100 % does not fit', () => {
     const l = layoutSheets(plan, A5, opts('shop', { sheet: { kind: 'preset', id: 'a4' } }));
     expect(l.warnings.join(' ')).toMatch(/does not fit/);
