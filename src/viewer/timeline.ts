@@ -33,10 +33,18 @@ export interface PageTurn {
   start: number;
   leafCount: number;
   /**
-   * How far a leaf held at world point (x, y) is turned: 0 = flat on the unturned side, 1 = flat on
-   * the turned side. The point is projected onto the book's plane by the caller.
+   * How far a leaf is turned when the point of it held `reach` of the way out from the spine (1 =
+   * its outer edge) is at world point (x, y): 0 = flat on the unturned side, 1 = flat on the turned
+   * side. The point is projected onto the book's plane by the caller.
    */
-  progressAt(x: number, y: number): number;
+  progressAt(x: number, y: number, reach?: number): number;
+  /** How far leaf `rank` is turned at `time` (0..1). */
+  progressOf(time: number, rank: number): number;
+  /**
+   * How far out from the spine a world point on leaf `rank` is, as a fraction of the leaf's width
+   * across the spine (0 = at the spine, 1 = outer edge).
+   */
+  reachAt(rank: number, x: number, y: number, z: number, explode: number): number;
   /** Timeline time showing leaf `rank` turned by `progress` (inverse of the easing). */
   timeFor(rank: number, progress: number): number;
   /** Which leaf (0 = first turned) a panel belongs to. */
@@ -325,7 +333,7 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     pageTurn = {
       start: read.start,
       leafCount,
-      progressAt(x, y) {
+      progressAt(x, y, reach = 1) {
         const d =
           sp.edge === 'left'
             ? x - spineWorld
@@ -334,7 +342,21 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
               : sp.edge === 'top'
                 ? (spineWorld - y) / aspect
                 : (y - spineWorld) / aspect;
-        return Math.acos(Math.min(1, Math.max(-1, d))) / Math.PI;
+        const r = Math.max(0.05, Math.min(1, reach));
+        return Math.acos(Math.min(1, Math.max(-1, d / r))) / Math.PI;
+      },
+      progressOf: (time, rank) => smooth(time - read.start - rank),
+      reachAt(rank, x, y, z, explode) {
+        // Distance from the spine axis in the plane across it; the leaf runs past the axis at its
+        // own height above it, so subtract that to get the distance along the leaf.
+        const gap = BASE_GAP * Math.max(1, explode);
+        const axisZ = ((leafCount - 1) / 2) * gap;
+        const height = ((leafCount - 1) / 2 - rank) * gap;
+        const unit = sp.axis === 'x' ? 1 : aspect;
+        const across = (sp.axis === 'x' ? x - spineWorld : y - spineWorld) / unit;
+        const up = (z - axisZ) / unit;
+        const along = Math.sqrt(Math.max(0, across * across + up * up - (height / unit) ** 2));
+        return Math.min(1, along);
       },
       timeFor: (rank, progress) => read.start + rank + unsmooth(progress),
       rankOf: (panel) => leafRank.get(panel),

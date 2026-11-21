@@ -44,6 +44,11 @@ export function App() {
   const [selectedId, setSelectedId] = useState(builtinRecipes[0]!.id);
   const selected = all.find((r) => r.id === selectedId) ?? builtinRecipes[0]!;
   const [text, setText] = useState(() => pretty(selected));
+  /**
+   * The recipe a loaded bug report was actually using. It stands in for the selected recipe while
+   * the editor text is invalid, so a report taken mid-edit rebuilds the same plan in any browser.
+   */
+  const [reportRecipe, setReportRecipe] = useState<Recipe | null>(null);
   const [pageCount, setPageCount] = useState(12);
   const [padding, setPadding] = useState<Padding | 'recipe'>('recipe');
   const [hovered, setHovered] = useState<number | null>(null);
@@ -54,7 +59,7 @@ export function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const draft = useMemo(() => parseDraft(text), [text]);
-  const active = draft.ok ? draft.recipe : selected;
+  const active = draft.ok ? draft.recipe : (reportRecipe ?? selected);
   const edited = text !== pretty(selected);
 
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
@@ -69,6 +74,7 @@ export function App() {
   const select = (id: string) => {
     const r = all.find((x) => x.id === id);
     if (!r) return;
+    setReportRecipe(null);
     logEvent('recipe', { id });
     setSelectedId(id);
     setText(pretty(r));
@@ -90,6 +96,7 @@ export function App() {
     }
     persist([...custom.filter((r) => r.id !== recipe.id), recipe]);
     setSelectedId(recipe.id);
+    setReportRecipe(null);
     setText(pretty(recipe));
   };
 
@@ -158,6 +165,7 @@ export function App() {
     logEvent('loadReport', { createdAt: report.createdAt });
     if (all.some((r) => r.id === input.selectedId)) setSelectedId(input.selectedId);
     setText(input.recipeText);
+    setReportRecipe(input.recipe);
     setPageCount(input.pageCount);
     setPadding(input.padding);
     setView(input.view);

@@ -259,6 +259,28 @@ describe('3D timeline agrees with the 2D plan', () => {
     expect(bolts.every((s) => s.cutAt === read.start)).toBe(true);
   });
 
+  it('keeps a page grabbed away from its edge attached to the pointer', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const tl = buildTimeline(r, plan, ASPECT);
+    const turn = tl.pageTurn!;
+    const mats = tl.panels.map(() => new Matrix4());
+    // Leaf 1 (pages 3/4) is panel 3, spine at x = 1. Take the point halfway out (x = 1.5).
+    for (const explode of [1, 10]) {
+      for (const p of [0, 0.3, 0.7]) {
+        tl.poseAt(turn.timeFor(1, p), explode, mats);
+        const w = new Vector3(1.5, -0.5 * ASPECT, 0).applyMatrix4(mats[3]!);
+        expect(turn.reachAt(1, w.x, w.y, w.z, explode)).toBeCloseTo(0.5, 6);
+      }
+    }
+    // With that reach, moving the pointer from x = 1.5 to the spine turns the page halfway, not
+    // the 1/3 the outer-edge mapping would give.
+    expect(turn.progressAt(1.5, 0, 0.5)).toBeCloseTo(0, 9);
+    expect(turn.progressAt(1, 0, 0.5)).toBeCloseTo(0.5, 9);
+    expect(turn.progressAt(0.5, 0, 0.5)).toBeCloseTo(1, 9);
+    expect(turn.progressOf(turn.timeFor(2, 0.25), 2)).toBeCloseTo(0.25, 9);
+  });
+
   it('builds fold-only timelines for sequence recipes', () => {
     const r = recipe('tri-fold-roll');
     const tl = buildTimeline(r, buildPlan(r, 6), ASPECT);
