@@ -5,13 +5,15 @@
  * these functions compute.
  */
 import {
-  gangPlan,
   NO_GANG,
+  paperPlan,
   type Gang,
   type GangPlan,
   type Grid,
+  type PaperPlan,
   type Plan,
   type Rotation,
+  type Sections,
   type Slot,
 } from '../engine';
 
@@ -83,6 +85,12 @@ export interface PrintOptions {
   gang?: Gang;
   /** Extra gap between ganged units for the cut, mm (on top of their bleed). */
   gutter?: number;
+  /**
+   * Divide the sheet into equal sections, one page each; spreads fill whole sections and leftover
+   * sections are printed blank, to be cut off (preset or custom sheets only). Replaces `gang`'s
+   * across/down; its order still applies.
+   */
+  sections?: Sections | null;
 }
 
 export type PrintPreset = 'home' | 'manual' | 'shop';
@@ -181,8 +189,14 @@ export interface SheetLayout {
   bleed: Rect;
   /** Printed sheets and which recipe sheet each unit holds. */
   gang: GangPlan;
+  /** How the printed sheet is divided (units, blank sections). */
+  paper: PaperPlan;
   /** Each unit's trim rectangle on the front, indexed [row][col] (front view). */
   units: Rect[][];
+  /** Blank sections on the front, cut off after printing. */
+  blanks: Rect[];
+  /** Crop and fold marks for one side (an off-centre layout's cut lines mirror on the back). */
+  marks(side: 'front' | 'back'): { crop: Segment[]; fold: Segment[] };
   /** Whether back sides are rotated 180° in the PDF (printer turns top ↔ bottom). */
   backRotated: boolean;
   /** Printer setting that matches: flip on the short or long edge. */
@@ -207,7 +221,10 @@ export function layoutSheets(
   o: PrintOptions,
 ): SheetLayout {
   const { cols, rows } = plan.grid;
-  const gang = gangPlan(plan.sheets.length, o.gang ?? NO_GANG);
+  const sections = o.sheet.kind === 'fit' ? null : (o.sections ?? null);
+  const paper = paperPlan(plan.sheets.length, plan.grid, o.gang ?? NO_GANG, sections);
+  if (paper.sectioned) return layoutSections(plan, page, o, paper);
+  const gang = paper.gang;
   const { across, down } = gang.gang;
   const unitW = cols * page.w;
   const unitH = rows * page.h;
@@ -338,22 +355,58 @@ export function layoutSheets(
       }
     : null;
 
-  function place(paper: number, side: 'front' | 'back'): PlacedSlot[] {
+  return {
+    width,
+    height,
+    orientation,
+    scale,
+    trim,
+    bleed: bleedRect,
+    gang,
+    paper,
+    units,
+    blanks: [],
+    backRotated,
+    printerFlip,
+    cropMarks,
+    foldMarks,
+    marks: sideMarks(cropMarks, foldMarks, width, height, backRotated),
+    slugAt,
+    warnings,
+    place: placer(plan, gang, units, width, height, backRotated),
+  };
+}
+
+/**
+ * Panels on one side of a printed sheet. A unit's back is its front rectangle mirrored about the
+ * sheet's centre (the sheet turns left ↔ right), so it lands exactly behind its front however the
+ * units are arranged; for a top ↔ bottom flip the whole back is then turned 180°.
+ */
+function placer(
+  plan: Plan,
+  gang: GangPlan,
+  units: Rect[][],
+  width: number,
+  height: number,
+  backRotated: boolean,
+) {
+  const { cols, rows } = plan.grid;
+  return (paper: number, side: 'front' | 'back'): PlacedSlot[] => {
     const out: PlacedSlot[] = [];
     const turn = side === 'back' && backRotated;
-    for (let ur = 0; ur < down; ur++) {
-      for (let uc = 0; uc < across; uc++) {
+    units.forEach((row, ur) =>
+      row.forEach((front, uc) => {
         const sheet = gang.sheetAt(paper, uc, ur);
-        if (sheet === null) continue;
-        // In the back view the sheet is turned left ↔ right, so a unit's back is in the mirrored
-        // column (and the units are evenly spaced and centred, so it lands right behind it).
-        const unit = units[ur]![side === 'back' ? across - 1 - uc : uc]!;
+        if (sheet === null) return;
+        const unit = side === 'back' ? { ...front, x: width - front.x - front.w } : front;
+        const pw = unit.w / cols;
+        const ph = unit.h / rows;
         for (const slot of plan.sheets[sheet]?.[side] ?? []) {
           let rect: Rect = {
-            x: unit.x + slot.col * page.w * scale,
-            y: unit.y + (rows - 1 - slot.row) * page.h * scale,
-            w: page.w * scale,
-            h: page.h * scale,
+            x: unit.x + slot.col * pw,
+            y: unit.y + (rows - 1 - slot.row) * ph,
+            w: pw,
+            h: ph,
           };
           let rotation = slot.rotation;
           let outer = {
@@ -375,9 +428,137 @@ export function layoutSheets(
           }
           out.push({ slot, sheet, rect, rotation, outer });
         }
-      }
-    }
+      }),
+    );
     return out;
+  };
+}
+
+/** Marks for each side: the front's, mirrored (and turned, for a top ↔ bottom flip) on the back. */
+function sideMarks(
+  crop: Segment[],
+  fold: Segment[],
+  width: number,
+  height: number,
+  backRotated: boolean,
+) {
+  const mirror = (m: Segment): Segment =>
+    backRotated
+      ? { x1: m.x1, y1: height - m.y1, x2: m.x2, y2: height - m.y2 }
+      : { x1: width - m.x1, y1: m.y1, x2: width - m.x2, y2: m.y2 };
+  const back = { crop: crop.map(mirror), fold: fold.map(mirror) };
+  return (side: 'front' | 'back') => (side === 'front' ? { crop, fold } : back);
+}
+
+const CUT_GUIDE = 4 * MM;
+
+/** Page (section) size for a sheet divided into sections, or null when it is not. */
+export function sectionPageSize(o: PrintOptions): { w: number; h: number } | null {
+  if (o.sheet.kind === 'fit' || !o.sections) return null;
+  const { width, height } = sheetSize(o, o.sections);
+  return { w: width / Math.max(1, o.sections.across), h: height / Math.max(1, o.sections.down) };
+}
+
+/** Sheet size and orientation for a sectioned sheet: 'auto' turns it so sections are longest. */
+function sheetSize(o: PrintOptions, sections: Sections) {
+  let size: { w: number; h: number };
+  if (o.sheet.kind === 'custom') size = { w: o.sheet.w * MM, h: o.sheet.h * MM };
+  else {
+    const id = o.sheet.kind === 'preset' ? o.sheet.id : 'a4';
+    const preset = SHEET_SIZES.find((s) => s.id === id) ?? SHEET_SIZES[1]!;
+    size = { w: preset.w * MM, h: preset.h * MM };
+  }
+  const short = Math.min(size.w, size.h);
+  const long = Math.max(size.w, size.h);
+  const landscape =
+    o.orientation === 'auto' ? sections.across > sections.down : o.orientation === 'landscape';
+  return { width: landscape ? long : short, height: landscape ? short : long };
+}
+
+/**
+ * A sheet divided into equal sections, one page each. Spreads fill whole sections (edge to edge, no
+ * bleed or gaps: the cuts are the section lines) and leftover sections stay blank. Cut guides are
+ * short ticks at the sheet's edges on every cut line, inside the printer margin.
+ */
+function layoutSections(
+  plan: Plan,
+  page: { w: number; h: number },
+  o: PrintOptions,
+  paper: PaperPlan,
+): SheetLayout {
+  const { cols, rows } = plan.grid;
+  const p = paper.paper;
+  const { width, height } = sheetSize(o, { across: p.across, down: p.down, blank: 'end' });
+  const cw = width / p.across;
+  const ch = height / p.down;
+  const cellRect = (col: number, row: number, w: number, h: number): Rect => ({
+    x: col * cw,
+    y: height - (row + h) * ch,
+    w: w * cw,
+    h: h * ch,
+  });
+  const { across, down } = paper.gang.gang;
+  const units = Array.from({ length: down }, (_, ur) =>
+    Array.from({ length: across }, (_, uc) => {
+      const c = p.unitCell(uc, ur);
+      return cellRect(c.col, c.row, cols, rows);
+    }),
+  );
+  const blanks = p.blanks.map((b) => cellRect(b.col, b.row, b.w, b.h));
+  const all = units.flat();
+  const x0 = Math.min(...all.map((u) => u.x));
+  const y0 = Math.min(...all.map((u) => u.y));
+  const trim: Rect = {
+    x: x0,
+    y: y0,
+    w: Math.max(...all.map((u) => u.x + u.w)) - x0,
+    h: Math.max(...all.map((u) => u.y + u.h)) - y0,
+  };
+  const scale = Math.min(cw / page.w, ch / page.h);
+  const orientation = width > height ? 'landscape' : 'portrait';
+  const natural: 'short' | 'long' = orientation === 'landscape' ? 'short' : 'long';
+  const printerFlip = o.flip === 'auto' ? natural : o.flip;
+  const backRotated = printerFlip !== natural;
+
+  const warnings: string[] = [];
+  if (Math.abs(scale - 1) > 0.005) {
+    warnings.push(
+      `Pages (${fmtMm(page.w)} × ${fmtMm(page.h)} mm) are fitted to the ${fmtMm(cw)} × ${fmtMm(ch)} mm sections at ${Math.round(scale * 1000) / 10} %.`,
+    );
+  }
+  if (o.bleed > 0)
+    warnings.push('Bleed is not used on a sheet divided into sections: pages meet at the cuts.');
+  if (o.margin > 0) {
+    warnings.push(
+      `Pages run to the edge of the sheet; keep artwork clear of the ${o.margin} mm the printer cannot print.`,
+    );
+  }
+
+  // Cut guides: ticks at the sheet edges on every inner cut line; fold guides likewise, dashed.
+  const inset = Math.max(0, o.margin) * MM;
+  const tickV = (x: number, into: Segment[]) => {
+    into.push({ x1: x, y1: height - inset, x2: x, y2: height - inset - CUT_GUIDE });
+    into.push({ x1: x, y1: inset, x2: x, y2: inset + CUT_GUIDE });
+  };
+  const tickH = (y: number, into: Segment[]) => {
+    into.push({ x1: inset, y1: y, x2: inset + CUT_GUIDE, y2: y });
+    into.push({ x1: width - inset, y1: y, x2: width - inset - CUT_GUIDE, y2: y });
+  };
+  const inner = (v: number, max: number) => v > 1e-6 && v < max - 1e-6;
+  const pieces = [...all, ...blanks];
+  const cropMarks: Segment[] = [];
+  if (o.cropMarks) {
+    for (const x of dedupe(pieces.flatMap((r) => [r.x, r.x + r.w])).filter((x) => inner(x, width)))
+      tickV(x, cropMarks);
+    for (const y of dedupe(pieces.flatMap((r) => [r.y, r.y + r.h])).filter((y) => inner(y, height)))
+      tickH(y, cropMarks);
+  }
+  const foldMarks: Segment[] = [];
+  if (o.foldMarks) {
+    for (const u of all) {
+      for (let c = 1; c < cols; c++) tickV(u.x + (c * u.w) / cols, foldMarks);
+      for (let r = 1; r < rows; r++) tickH(u.y + u.h - (r * u.h) / rows, foldMarks);
+    }
   }
 
   return {
@@ -386,16 +567,19 @@ export function layoutSheets(
     orientation,
     scale,
     trim,
-    bleed: bleedRect,
-    gang,
+    bleed: trim,
+    gang: paper.gang,
+    paper,
     units,
+    blanks,
     backRotated,
     printerFlip,
     cropMarks,
     foldMarks,
-    slugAt,
+    marks: sideMarks(cropMarks, foldMarks, width, height, backRotated),
+    slugAt: null,
     warnings,
-    place,
+    place: placer(plan, paper.gang, units, width, height, backRotated),
   };
 }
 

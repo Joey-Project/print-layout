@@ -361,4 +361,31 @@ describe('PDF export and de-imposition round trip', () => {
     // Printed sheet 1's front: the outer spread of each pile (16|1 and 12|5).
     expect(pages[0]!.sort()).toEqual(['1', '12', '16', '5']);
   });
+  it('exports a sheet divided into thirds: spread in two, blank third', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const options = opts('home', {
+      sheet: { kind: 'preset', id: 'a4' },
+      sections: { across: 3, down: 1, blank: 'end' },
+    });
+    const { files, layout } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options,
+      baseName: 'test',
+    });
+    const doc = await loadPdf(files[0]!.bytes);
+    expect(doc.getPageCount()).toBe(4);
+    expect(doc.getPage(0).getWidth() / MM).toBeCloseTo(297, 3);
+    const pages = await visibleNumbers(files[0]!.bytes);
+    expect(pages.map((p) => p.sort())).toEqual([
+      ['1', '8'],
+      ['2', '7'],
+      ['3', '6'],
+      ['4', '5'],
+    ]);
+    expect(layout.scale).toBeCloseTo(1, 9); // the dummy is sized to the sections
+  });
 });

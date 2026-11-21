@@ -73,3 +73,101 @@ export function gangPlan(sheetCount: number, gang: Gang): GangPlan {
 
 /** Column, in the back view, of the unit whose front is at `col` (the sheet turns left ↔ right). */
 export const backUnitColumn = (gang: Gang, col: number) => gang.across - 1 - col;
+
+/**
+ * Dividing the printed sheet into equal sections, one page each (e.g. A4 landscape in three to make
+ * long, narrow pages): spreads fill whole sections and any sections left over stay blank, to be cut
+ * off after printing.
+ */
+export interface Sections {
+  across: number;
+  down: number;
+  /** Where the leftover blank sections go on the front: after the spreads or before them. */
+  blank: 'end' | 'start';
+}
+
+/** A rectangle of sections (cells) on a printed sheet's front: column, row, width, height. */
+export interface CellRect {
+  col: number;
+  row: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * How a printed sheet is divided: its grid of page-sized cells, where each unit (recipe sheet)
+ * sits, and which cells are blank. Positions are in the front view.
+ */
+export interface PaperLayout {
+  /** Page-sized cells across and down the printed sheet. */
+  across: number;
+  down: number;
+  /** Cells per unit (the recipe's panel grid). */
+  unitCols: number;
+  unitRows: number;
+  /** Top-left cell of the unit at unit position (col, row). */
+  unitCell(col: number, row: number): { col: number; row: number };
+  /** Leftover cells, printed blank and cut off. */
+  blanks: CellRect[];
+}
+
+export interface PaperPlan {
+  gang: GangPlan;
+  paper: PaperLayout;
+  /** True when the sheet is divided into sections (pages sized by the sheet). */
+  sectioned: boolean;
+}
+
+/**
+ * Units per printed sheet and where they go. With `sections`, the number of units follows from how
+ * many whole spreads fit in the sections; otherwise from the gang.
+ */
+export function paperPlan(
+  sheetCount: number,
+  grid: { cols: number; rows: number },
+  gang: Gang,
+  sections: Sections | null = null,
+): PaperPlan {
+  if (!sections) {
+    const plan = gangPlan(sheetCount, gang);
+    return {
+      gang: plan,
+      sectioned: false,
+      paper: {
+        across: plan.gang.across * grid.cols,
+        down: plan.gang.down * grid.rows,
+        unitCols: grid.cols,
+        unitRows: grid.rows,
+        unitCell: (col, row) => ({ col: col * grid.cols, row: row * grid.rows }),
+        blanks: [],
+      },
+    };
+  }
+  const across = Math.max(grid.cols, Math.floor(sections.across));
+  const down = Math.max(grid.rows, Math.floor(sections.down));
+  const unitsAcross = Math.floor(across / grid.cols);
+  const unitsDown = Math.floor(down / grid.rows);
+  const usedW = unitsAcross * grid.cols;
+  const usedH = unitsDown * grid.rows;
+  const freeW = across - usedW;
+  const freeH = down - usedH;
+  const x0 = sections.blank === 'start' ? freeW : 0;
+  const y0 = sections.blank === 'start' ? freeH : 0;
+  const blanks: CellRect[] = [];
+  if (freeW > 0)
+    blanks.push({ col: sections.blank === 'start' ? 0 : usedW, row: y0, w: freeW, h: usedH });
+  if (freeH > 0)
+    blanks.push({ col: 0, row: sections.blank === 'start' ? 0 : usedH, w: across, h: freeH });
+  return {
+    gang: gangPlan(sheetCount, { ...gang, across: unitsAcross, down: unitsDown }),
+    sectioned: true,
+    paper: {
+      across,
+      down,
+      unitCols: grid.cols,
+      unitRows: grid.rows,
+      unitCell: (col, row) => ({ col: x0 + col * grid.cols, row: y0 + row * grid.rows }),
+      blanks,
+    },
+  };
+}

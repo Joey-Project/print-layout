@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NO_GANG, type Gang, type Plan, type Recipe } from '../engine';
 import {
   layoutSheets,
+  sectionPageSize,
   MM,
   PAGE_SIZES,
   PRINT_PRESETS,
@@ -100,11 +101,18 @@ export function PrintView({
   const source = pdf?.mode === 'reading' ? pdf : null;
   const pageSize = useMemo(() => {
     const first = source?.info[0];
-    return first ? physicalSize(first, first.trim) : dummySize(settings.dummyPage);
-  }, [source, settings.dummyPage]);
+    if (first) return physicalSize(first, first.trim);
+    // A sheet divided into sections sizes the dummy's pages itself.
+    return sectionPageSize(o) ?? dummySize(settings.dummyPage);
+  }, [source, settings.dummyPage, o]);
   const layout = useMemo(() => layoutSheets(plan, pageSize, o), [plan, pageSize, o]);
   const gang = o.gang ?? NO_GANG;
   const units = layout.gang.units;
+  const sectioned = layout.paper.sectioned;
+  const sections = o.sections ?? { across: 3, down: 1, blank: 'end' as const };
+  const setSections = (patch: Partial<typeof sections>) =>
+    set({ sections: { ...sections, ...patch } });
+  const blankCount = layout.paper.paper.blanks.reduce((n, b) => n + b.w * b.h, 0);
   const setGang = (patch: Partial<Gang>) => set({ gang: { ...gang, ...patch } });
   /**
    * The most units per side that fit (ties: the roomier layout). At actual size they must fit at
@@ -252,7 +260,7 @@ export function PrintView({
       </div>
 
       <div className="print-options">
-        {!source && (
+        {!source && !sectioned && (
           <label>
             Page size (dummy)
             <select
@@ -426,55 +434,109 @@ export function PrintView({
 
       <fieldset className="gang">
         <legend>Several per sheet</legend>
-        <label>
-          Across
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={gang.across}
-            onChange={(e) =>
-              setGang({ across: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
-            }
-          />
-        </label>
-        <label>
-          Down
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={gang.down}
-            onChange={(e) =>
-              setGang({ down: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
-            }
-          />
-        </label>
-        {units > 1 && (
+        {o.sheet.kind !== 'fit' && (
+          <label className="check wide">
+            <input
+              type="checkbox"
+              checked={Boolean(o.sections)}
+              onChange={(e) =>
+                set({ sections: e.target.checked ? { across: 3, down: 1, blank: 'end' } : null })
+              }
+            />
+            Divide the sheet into equal sections, one page each (e.g. A4 in thirds for long, narrow
+            pages)
+          </label>
+        )}
+        {sectioned ? (
           <>
             <label>
-              Then
-              <select
-                value={gang.order}
-                onChange={(e) => setGang({ order: e.target.value as Gang['order'] })}
-              >
-                <option value="stack">Cut and stack (one copy)</option>
-                <option value="copies">Copies ({units} per print run)</option>
-              </select>
-            </label>
-            <label>
-              Cutting gap (mm)
+              Sections across
               <input
                 type="number"
-                min={0}
-                step={0.5}
-                value={o.gutter ?? 0}
-                onChange={(e) => set({ gutter: Math.max(0, Number(e.target.value) || 0) })}
+                min={1}
+                max={12}
+                value={sections.across}
+                onChange={(e) =>
+                  setSections({ across: Math.min(12, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Sections down
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={sections.down}
+                onChange={(e) =>
+                  setSections({ down: Math.min(12, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Blank sections go
+              <select
+                value={sections.blank}
+                onChange={(e) => setSections({ blank: e.target.value as 'end' | 'start' })}
+              >
+                <option value="end">After the pages (right / bottom)</option>
+                <option value="start">Before the pages (left / top)</option>
+              </select>
+            </label>
+          </>
+        ) : (
+          <>
+            <label>
+              Across
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={gang.across}
+                onChange={(e) =>
+                  setGang({ across: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Down
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={gang.down}
+                onChange={(e) =>
+                  setGang({ down: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
+                }
               />
             </label>
           </>
         )}
-        {o.sheet.kind !== 'fit' && (
+        {units > 1 && (
+          <label>
+            Then
+            <select
+              value={gang.order}
+              onChange={(e) => setGang({ order: e.target.value as Gang['order'] })}
+            >
+              <option value="stack">Cut and stack (one copy)</option>
+              <option value="copies">Copies ({units} per print run)</option>
+            </select>
+          </label>
+        )}
+        {units > 1 && !sectioned && (
+          <label>
+            Cutting gap (mm)
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={o.gutter ?? 0}
+              onChange={(e) => set({ gutter: Math.max(0, Number(e.target.value) || 0) })}
+            />
+          </label>
+        )}
+        {o.sheet.kind !== 'fit' && !sectioned && (
           <button
             onClick={fillSheet}
             title={
@@ -485,6 +547,16 @@ export function PrintView({
           >
             Fill the sheet
           </button>
+        )}
+        {sectioned && (
+          <p className="muted small wide">
+            Sections of {mm(layout.width / layout.paper.paper.across)} ×{' '}
+            {mm(layout.height / layout.paper.paper.down)} mm: {units} spread
+            {units === 1 ? '' : 's'} per side
+            {blankCount > 0 &&
+              `, ${blankCount} blank section${blankCount === 1 ? '' : 's'} to cut off`}
+            . Pages run to the cut lines (no bleed); cut guides mark them at the sheet edges.
+          </p>
         )}
       </fieldset>
 

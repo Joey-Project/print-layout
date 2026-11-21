@@ -11,7 +11,7 @@
  */
 import { Matrix4 } from 'three';
 import { applyFold, packetBounds, type Facet } from '../engine/fold';
-import type { GangPlan } from '../engine/gang';
+import type { PaperPlan } from '../engine/gang';
 import type { BindingEdge, FoldStep, Plan, Recipe } from '../engine/types';
 
 export interface PanelRef {
@@ -79,7 +79,23 @@ export interface Seam {
   cutAt: number;
 }
 
+/** A blank section of a printed sheet (cut off after printing), in sections. */
+export interface WastePiece {
+  paper: number;
+  col: number;
+  row: number;
+  w: number;
+  h: number;
+}
+
 export interface Timeline {
+  /** Blank sections cut off the printed sheets; see `wasteAt`. */
+  waste: WastePiece[];
+  /**
+   * Pose of waste piece `i` at time t: writes the matrix placing its top-left corner (its local
+   * origin; it spans x ∈ [0, w], y ∈ [−h·aspect, 0]) and returns whether it is shown.
+   */
+  wasteAt(i: number, t: number, out: Matrix4): boolean;
   /** Total length in steps. */
   duration: number;
   segments: Segment[];
@@ -214,8 +230,11 @@ export function buildTimeline(
   recipe: Recipe,
   plan: Plan,
   aspect: number,
-  /** Several recipe sheets per printed sheet: start from the printed sheets and cut them apart. */
-  gang: GangPlan | null = null,
+  /**
+   * How sheets are printed (several per printed sheet, or a sheet divided into sections with blank
+   * ones): start from the printed sheets and cut them apart.
+   */
+  paperPlan: PaperPlan | null = null,
 ): Timeline {
   const { cols, rows } = recipe.grid;
   const sheetCount = plan.sheets.length;
@@ -326,29 +345,69 @@ export function buildTimeline(
   // Ganged printing (cut and stack): the printed sheets are cut into their units, which are then
   // arranged into the recipe's sheet order. (Copies print the same sheet several times; the model
   // shows one copy.)
-  const ganged = gang !== null && gang.units > 1 && gang.gang.order === 'stack';
+  const gang = paperPlan?.gang ?? null;
+  const layout = paperPlan?.paper ?? null;
+  const blanks = layout?.blanks ?? [];
+  // Copies print the same sheet several times; the model shows one copy.
+  const ganged =
+    gang !== null &&
+    layout !== null &&
+    ((gang.units > 1 && gang.gang.order === 'stack') || blanks.length > 0);
   let cut: Segment | undefined;
   let arrange: Segment | undefined;
   if (ganged) {
-    cut = push('cut', `Cut each printed sheet into its ${gang.units} parts`);
+    const parts = gang.units > 1 ? `its ${gang.units} parts` : 'its spread';
+    cut = push(
+      'cut',
+      blanks.length
+        ? `Cut each printed sheet into ${parts}, cutting off the blank section${blanks.length > 1 ? 's' : ''}`
+        : `Cut each printed sheet into ${parts}`,
+    );
     arrange = push(
       'arrange',
-      'Stack the piles in order: each part slides into place, sheet 1 first',
+      gang.units > 1
+        ? 'Stack the piles in order: each part slides into place, sheet 1 first'
+        : 'Put the cut sheets in order, sheet 1 first',
     );
   }
-  const unitW = cols;
-  const unitH = rows * aspect;
+  // Cut lines (in sections) across and down the printed sheet: a gap opens at each when cut.
+  const cutsX: number[] = [];
+  const cutsY: number[] = [];
+  if (ganged) {
+    const pieces = [
+      ...Array.from({ length: gang.gang.down }, (_, r) =>
+        Array.from({ length: gang.gang.across }, (_, c) => {
+          const cell = layout.unitCell(c, r);
+          return { col: cell.col, row: cell.row, w: layout.unitCols, h: layout.unitRows };
+        }),
+      ).flat(),
+      ...blanks,
+    ];
+    for (const pc of pieces) {
+      for (const x of [pc.col, pc.col + pc.w])
+        if (x > 0 && x < layout.across && !cutsX.includes(x)) cutsX.push(x);
+      for (const y of [pc.row, pc.row + pc.h])
+        if (y > 0 && y < layout.down && !cutsY.includes(y)) cutsY.push(y);
+    }
+  }
+  // One section is one page: 1 wide, `aspect` high.
   const paperStride = ganged
-    ? gang.gang.down * unitH + (gang.gang.down - 1) * UNIT_GAP_CUT + SHEET_SPACING
+    ? layout.down * aspect + cutsY.length * UNIT_GAP_CUT + SHEET_SPACING
     : 0;
-  /** Where a recipe sheet lies on its printed sheet (front view), with units `g` apart. */
+  /** Top-left of a piece starting at section (col, row) of printed sheet `paper`, cuts `g` apart. */
+  const pieceAt = (paper: number, col: number, row: number, g: number) => ({
+    x: col + cutsX.filter((c) => c <= col).length * g,
+    y: -paper * paperStride - row * aspect - cutsY.filter((c) => c <= row).length * g,
+  });
+  /** Where a recipe sheet lies on its printed sheet (front view), with cuts `g` apart. */
   const printedAt = (sheet: number, g: number) => {
     const at = gang!.placeOf(sheet);
-    return {
-      x: at.col * (unitW + g),
-      y: -at.paper * paperStride - at.row * (unitH + g),
-    };
+    const cell = layout!.unitCell(at.col, at.row);
+    return pieceAt(at.paper, cell.col, cell.row, g);
   };
+  const waste: WastePiece[] = ganged
+    ? Array.from({ length: gang.papers }, (_, paper) => blanks.map((b) => ({ paper, ...b }))).flat()
+    : [];
 
   let collate: Segment | undefined;
   let collateSettle: Segment | undefined;
@@ -630,6 +689,27 @@ export function buildTimeline(
     });
   }
 
+  function wasteAt(i: number, time: number, out: Matrix4): boolean {
+    const w = waste[i];
+    if (!w || !cut || !arrange || time >= arrange.end) return false;
+    const tt = Math.max(0, time);
+    if (tt <= cut.end) {
+      const { x, y } = pieceAt(
+        w.paper,
+        w.col,
+        w.row,
+        lerp(UNIT_GAP_PRINTED, UNIT_GAP_CUT, smooth(tt - cut.start)),
+      );
+      out.makeTranslation(x, y, 0);
+      return true;
+    }
+    // Cut off: slide away from the sheets and drop, then gone.
+    const { x, y } = pieceAt(w.paper, w.col, w.row, UNIT_GAP_CUT);
+    const u = smooth(tt - arrange.start);
+    out.makeTranslation(x + u * 1.5, y, -u * 1.2);
+    return u < 0.98;
+  }
+
   function spineAxisAt(time: number, explode: number, panel?: number): SpineAxis | null {
     if (!read || !spine || time < read.start) return null;
     const rank = (panel === undefined ? undefined : leafRank.get(panel)) ?? 0;
@@ -640,6 +720,8 @@ export function buildTimeline(
   }
 
   return {
+    waste,
+    wasteAt,
     spineAxisAt,
     duration,
     segments,

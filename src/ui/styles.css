@@ -569,3 +569,6 @@ label.inline {
 .gang input[type='number'] {
   width: 5.5em;
 }
+.gang .wide {
+  flex-basis: 100%;
+}

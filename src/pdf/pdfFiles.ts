@@ -34,6 +34,8 @@ import type { Plan, Recipe } from '../engine';
 import {
   layoutSheets,
   MM,
+  sectionPageSize,
+  type Segment,
   placePage,
   type PrintOptions,
   type Rect,
@@ -269,7 +271,7 @@ async function drawSide(
       rotate: degrees(p.rotateCcw),
     });
   }
-  drawMarks(page, layout, registration);
+  drawMarks(page, layout.marks(side), registration);
   if (slug && layout.slugAt) {
     page.drawText(`${slug.text} · sheet ${paper + 1} of ${layout.gang.papers} ${side}`, {
       x: layout.slugAt.x,
@@ -305,8 +307,12 @@ function registrationColorSpace(doc: PDFDocument): PDFRef {
 
 const REG_CS = 'CSRegistration';
 
-function drawMarks(page: PDFPage, layout: SheetLayout, registration: PDFRef) {
-  if (!layout.cropMarks.length && !layout.foldMarks.length) return;
+function drawMarks(
+  page: PDFPage,
+  marks: { crop: Segment[]; fold: Segment[] },
+  registration: PDFRef,
+) {
+  if (!marks.crop.length && !marks.fold.length) return;
   const { Resources } = page.node.normalizedEntries();
   let spaces = Resources.lookupMaybe(PDFName.of('ColorSpace'), PDFDict);
   if (!spaces) {
@@ -322,10 +328,10 @@ function drawMarks(page: PDFPage, layout: SheetLayout, registration: PDFRef) {
   ];
   const line = (m: { x1: number; y1: number; x2: number; y2: number }) =>
     ops.push(moveTo(m.x1, m.y1), lineTo(m.x2, m.y2), stroke());
-  layout.cropMarks.forEach(line);
-  if (layout.foldMarks.length) {
+  marks.crop.forEach(line);
+  if (marks.fold.length) {
     ops.push(setDashPattern([2, 2], 0));
-    layout.foldMarks.forEach(line);
+    marks.fold.forEach(line);
   }
   ops.push(popGraphicsState());
   page.pushOperators(...ops);
@@ -348,13 +354,15 @@ export interface ExportInput {
 /** Impose the source onto print-ready sheets. */
 export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const { plan, recipe, options } = input;
+  // A sheet divided into sections sizes the dummy's pages itself.
+  const dummySize = sectionPageSize(options) ?? input.dummyPageSize;
   // The dummy is saved and reloaded so its pages embed like any loaded PDF's.
   const src = await loadPdf(
-    input.source ?? (await (await placeholderPdf(plan.pageCount, input.dummyPageSize)).save()),
+    input.source ?? (await (await placeholderPdf(plan.pageCount, dummySize)).save()),
   );
   flattenForPrint(src);
   const info = pageInfo(src);
-  const pageSize = input.source ? finishedPageSize(info) : input.dummyPageSize;
+  const pageSize = input.source ? finishedPageSize(info) : dummySize;
   const layout = layoutSheets(plan, pageSize, options);
   const bleed = Math.max(0, options.bleed) * MM;
   // Printed sheets (several recipe sheets each when ganged).

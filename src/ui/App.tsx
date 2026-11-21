@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPlan,
   builtinRecipes,
-  gangPlan,
   NO_GANG,
+  paperPlan,
   pagesPerSheet,
   ImpositionError,
   recipeProblems,
@@ -12,6 +12,7 @@ import {
   type Recipe,
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
+import { sectionPageSize } from '../pdf/geometry';
 import { DEFAULT_IMPOSED, sideMap, type ImposedOptions } from '../pdf/imposed';
 import { usePdfArt, type LoadedPdf } from './pdfArt';
 import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
@@ -127,9 +128,22 @@ export function App() {
   const pdfArt = usePdfArt(pdf, plan, imposed);
   // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
   const printGang = print.options.gang ?? NO_GANG;
+  // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
+  const section = sectionPageSize(print.options);
+  const sectionAspect = section ? section.h / section.w : null;
+  const printSections =
+    print.options.sheet.kind === 'fit' ? null : (print.options.sections ?? null);
   const gang = useMemo(
-    () => (plan ? gangPlan(plan.sheets.length, printGang) : null),
-    [plan, printGang.across, printGang.down, printGang.order],
+    () => (plan ? paperPlan(plan.sheets.length, plan.grid, printGang, printSections) : null),
+    [
+      plan,
+      printGang.across,
+      printGang.down,
+      printGang.order,
+      printSections?.across,
+      printSections?.down,
+      printSections?.blank,
+    ],
   );
 
   // ---- Bug reports. ----
@@ -437,7 +451,8 @@ export function App() {
                   onRestored={clearRestore}
                   art={pdfArt?.art ?? null}
                   artVersion={pdfArt?.version ?? 0}
-                  pdfAspect={pdfArt?.aspect ?? null}
+                  pdfAspect={pdfArt?.aspect ?? sectionAspect}
+                  pdfAspectLabel={pdfArt ? 'From PDF' : 'From print sections'}
                   gang={gang}
                 />
               )}
