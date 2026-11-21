@@ -6,9 +6,18 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 export type PdfJsDoc = pdfjs.PDFDocumentProxy;
 
+/** Where the build publishes pdf.js's CMaps and standard fonts (see vite.config.ts). */
+const asset = (dir: string) => new URL(`pdfjs/${dir}/`, document.baseURI).href;
+
 /** pdf.js takes ownership of the buffer it is given, so it gets a copy. */
 export const openPdfJs = (bytes: Uint8Array): Promise<PdfJsDoc> =>
-  pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
+  pdfjs.getDocument({
+    data: bytes.slice(),
+    verbosity: 0,
+    cMapUrl: asset('cmaps'),
+    cMapPacked: true,
+    standardFontDataUrl: asset('standard_fonts'),
+  }).promise;
 
 /** Render page `index` (0-based) as displayed (after /Rotate), its longest side `px` pixels. */
 export async function renderPage(

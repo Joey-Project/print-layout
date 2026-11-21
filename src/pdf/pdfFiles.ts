@@ -15,11 +15,18 @@ import {
   PDFName,
   PDFNumber,
   type PDFObject,
+  PDFOperator,
+  PDFOperatorNames,
   type PDFPage,
   PDFRef,
   PDFStream,
   popGraphicsState,
   pushGraphicsState,
+  lineTo,
+  moveTo,
+  setDashPattern,
+  setLineWidth,
+  stroke,
   StandardFonts,
   type PDFFont,
 } from 'pdf-lib';
@@ -60,23 +67,20 @@ const ANNOT_PRINT = 4;
 
 /**
  * Bake what would print into each page's own content, so embedding a page (which carries only its
- * content stream) keeps it: filled form fields, then every other annotation that is set to print
- * and has an appearance (stamps, highlights, signatures, free text…). pdf.js shows these in the
+ * content stream) keeps it: every annotation that is set to print, is not hidden and has an
+ * appearance — form fields, stamps, highlights, signatures, free text… pdf.js shows these in the
  * preview, so without this they would silently vanish from the exported sheets.
+ *
+ * Form fields are not flattened with pdf-lib's `form.flatten()`, which draws every widget
+ * regardless of its flags; their appearances are only brought up to date, then drawn like any
+ * other annotation.
  */
 export function flattenForPrint(doc: PDFDocument) {
   try {
     const form = doc.getForm();
-    if (form.getFields().length > 0) {
-      try {
-        form.flatten();
-      } catch {
-        // Values the standard fonts cannot draw: keep the appearances the PDF already has.
-        form.flatten({ updateFieldAppearances: false });
-      }
-    }
+    if (form.getFields().length > 0) form.updateFieldAppearances();
   } catch {
-    // A broken form: its widgets are still handled as plain annotations below.
+    // Values the standard fonts cannot draw, or a broken form: keep the appearances it has.
   }
   for (const page of doc.getPages()) {
     const annots = page.node.Annots();
@@ -230,9 +234,6 @@ export interface ExportResult {
  */
 const hasContents = (page: PDFPage) => page.node.Contents() !== undefined;
 
-/** Registration colour for marks: prints on every plate. */
-const REGISTRATION = cmyk(1, 1, 1, 1);
-
 async function drawSide(
   out: PDFDocument,
   src: PDFDocument,
@@ -241,8 +242,9 @@ async function drawSide(
   sheet: number,
   side: 'front' | 'back',
   bleed: number,
-  slug: { font: PDFFont; text: string } | null,
+  extras: { slug: { font: PDFFont; text: string } | null; registration: PDFRef },
 ) {
+  const { slug, registration } = extras;
   const page = out.addPage([layout.width, layout.height]);
   for (const placed of layout.place(sheet, side)) {
     const n = placed.slot.page;
@@ -265,7 +267,7 @@ async function drawSide(
       rotate: degrees(p.rotateCcw),
     });
   }
-  drawMarks(page, layout);
+  drawMarks(page, layout, registration);
   if (slug && layout.slugAt) {
     page.drawText(`${slug.text} · sheet ${sheet + 1} ${side}`, {
       x: layout.slugAt.x,
@@ -282,24 +284,49 @@ async function drawSide(
   return page;
 }
 
-function drawMarks(page: PDFPage, layout: SheetLayout) {
-  for (const m of layout.cropMarks) {
-    page.drawLine({
-      start: { x: m.x1, y: m.y1 },
-      end: { x: m.x2, y: m.y2 },
-      thickness: 0.25,
-      color: REGISTRATION,
-    });
+/**
+ * The registration colour space: the special separation /All paints on every plate, process and
+ * spot alike (PDF 32000 8.6.6.4); viewers show it through its CMYK alternate (all inks = black).
+ */
+function registrationColorSpace(doc: PDFDocument): PDFRef {
+  const tint = doc.context.obj({
+    FunctionType: 2,
+    Domain: [0, 1],
+    C0: [0, 0, 0, 0],
+    C1: [1, 1, 1, 1],
+    N: 1,
+  });
+  return doc.context.register(
+    doc.context.obj([PDFName.of('Separation'), PDFName.of('All'), PDFName.of('DeviceCMYK'), tint]),
+  );
+}
+
+const REG_CS = 'CSRegistration';
+
+function drawMarks(page: PDFPage, layout: SheetLayout, registration: PDFRef) {
+  if (!layout.cropMarks.length && !layout.foldMarks.length) return;
+  const { Resources } = page.node.normalizedEntries();
+  let spaces = Resources.lookupMaybe(PDFName.of('ColorSpace'), PDFDict);
+  if (!spaces) {
+    spaces = page.doc.context.obj({});
+    Resources.set(PDFName.of('ColorSpace'), spaces);
   }
-  for (const m of layout.foldMarks) {
-    page.drawLine({
-      start: { x: m.x1, y: m.y1 },
-      end: { x: m.x2, y: m.y2 },
-      thickness: 0.25,
-      color: REGISTRATION,
-      dashArray: [2, 2],
-    });
+  spaces.set(PDFName.of(REG_CS), registration);
+  const ops: PDFOperator[] = [
+    pushGraphicsState(),
+    PDFOperator.of(PDFOperatorNames.StrokingColorspace, [PDFName.of(REG_CS)]),
+    PDFOperator.of(PDFOperatorNames.StrokingColorN, [PDFNumber.of(1)]),
+    setLineWidth(0.25),
+  ];
+  const line = (m: { x1: number; y1: number; x2: number; y2: number }) =>
+    ops.push(moveTo(m.x1, m.y1), lineTo(m.x2, m.y2), stroke());
+  layout.cropMarks.forEach(line);
+  if (layout.foldMarks.length) {
+    ops.push(setDashPattern([2, 2], 0));
+    layout.foldMarks.forEach(line);
   }
+  ops.push(popGraphicsState());
+  page.pushOperators(...ops);
 }
 
 export interface ExportInput {
@@ -338,25 +365,31 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
     doc.setCreator('Print Layout');
     doc.setProducer('Print Layout (pdf-lib)');
     const font = await doc.embedFont(StandardFonts.Helvetica);
-    return { doc, slug: options.slug ? { font, text: asciiOnly(title) } : null };
+    return {
+      doc,
+      extras: {
+        slug: options.slug ? { font, text: asciiOnly(title) } : null,
+        registration: registrationColorSpace(doc),
+      },
+    };
   };
 
   const files: ExportFile[] = [];
   if (options.sides === 'duplex' || !hasBacks) {
-    const { doc, slug } = await make();
+    const { doc, extras } = await make();
     for (const s of sheets) {
-      await drawSide(doc, src, info, layout, s, 'front', bleed, slug);
-      if (hasBacks) await drawSide(doc, src, info, layout, s, 'back', bleed, slug);
+      await drawSide(doc, src, info, layout, s, 'front', bleed, extras);
+      if (hasBacks) await drawSide(doc, src, info, layout, s, 'back', bleed, extras);
     }
     files.push({ name: `${input.baseName}-imposed.pdf`, bytes: await doc.save() });
   } else {
     const fronts = await make();
     const backs = await make();
     for (const s of sheets)
-      await drawSide(fronts.doc, src, info, layout, s, 'front', bleed, fronts.slug);
+      await drawSide(fronts.doc, src, info, layout, s, 'front', bleed, fronts.extras);
     const backOrder = options.reverseBacks ? [...sheets].reverse() : sheets;
     for (const s of backOrder)
-      await drawSide(backs.doc, src, info, layout, s, 'back', bleed, backs.slug);
+      await drawSide(backs.doc, src, info, layout, s, 'back', bleed, backs.extras);
     files.push({ name: `${input.baseName}-fronts.pdf`, bytes: await fronts.doc.save() });
     files.push({ name: `${input.baseName}-backs.pdf`, bytes: await backs.doc.save() });
   }

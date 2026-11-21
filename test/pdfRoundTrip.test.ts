@@ -1,7 +1,7 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
 import { DEFAULT_IMPOSED, type ImposedOptions } from '../src/pdf/imposed';
-import { PDFDocument } from 'pdf-lib';
+import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { deimposePdf, exportImposed, loadPdf, pageInfo, placeholderPdf } from '../src/pdf/pdfFiles';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
@@ -237,6 +237,11 @@ describe('PDF export and de-imposition round trip', () => {
     field.setText('2');
     field.addToPage(doc.getPage(1), { x: 40, y: 200, width: 200, height: 120 });
     field.setFontSize(80);
+    // A hidden form field must not print either.
+    const secret = doc.getForm().createTextField('secret');
+    secret.setText('9');
+    secret.addToPage(doc.getPage(1), { x: 40, y: 360, width: 200, height: 120, hidden: true });
+    secret.setFontSize(80);
     expect(doc.getPage(0).node.Contents()).toBeUndefined();
     const source = await doc.save();
 
@@ -252,5 +257,34 @@ describe('PDF export and de-imposition round trip', () => {
     expect(shown).toContain('1');
     expect(shown).toContain('2');
     expect(shown.filter((x) => x === '7')).toHaveLength(1); // page 7 itself, not the hidden stamp
+    expect(shown).not.toContain('9'); // the hidden field
+  });
+  it('draws crop and fold marks in the registration (/All) separation', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options: opts('shop'),
+      baseName: 'test',
+    });
+    const doc = await loadPdf(files[0]!.bytes);
+    const page = doc.getPage(0);
+    const spaces = page.node.Resources()!.lookup(PDFName.of('ColorSpace'), PDFDict);
+    const cs = spaces.lookup(PDFName.of('CSRegistration'), PDFArray);
+    expect(cs.lookup(0)).toBe(PDFName.of('Separation'));
+    expect(cs.lookup(1)).toBe(PDFName.of('All'));
+    // The page content selects it for stroking before drawing the marks.
+    const contents = page.node.Contents()!;
+    const streams =
+      contents instanceof PDFArray
+        ? Array.from({ length: contents.size() }, (_, k) => contents.lookup(k, PDFRawStream))
+        : [contents as PDFRawStream];
+    const content = streams
+      .map((st) => new TextDecoder().decode(decodePDFRawStream(st).decode()))
+      .join('\n');
+    expect(content).toMatch(/\/CSRegistration CS\s+1 SCN/);
   });
 });
