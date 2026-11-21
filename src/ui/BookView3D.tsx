@@ -282,6 +282,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
         }
         s.tl.poseAt(t, L.explode, s.mats);
         s.groups.forEach((g, i) => g.matrix.copy(s.mats[i]!));
+        const axis = s.tl.spineAxisAt(t, L.explode);
         for (const sm of s.seams) {
           const arr = sm.positions.array as Float32Array;
           const gap = seamStrip(
@@ -290,6 +291,7 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
             s.mats[sm.seam.b]!,
             SEAM_SEGMENTS,
             arr,
+            axis,
           );
           sm.mesh.visible = t < sm.seam.cutAt && gap > 1e-6;
           if (!sm.mesh.visible) continue;

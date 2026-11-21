@@ -120,9 +120,14 @@ describe('3D timeline agrees with the 2D plan', () => {
       expect(turn.progressAt(x, 0)).toBeCloseTo(p, 6);
       tl.poseAt(turn.timeFor(1, p), 1, mats);
       // The second leaf (pages 3/4) is the outer half of sheet 2 (panel index 3): its centre should
-      // sit halfway between spine and pointer.
+      // sit halfway between spine and pointer, give or take its height above the spine axis
+      // (leaves turn about the middle of the 4-leaf block: it sits half a gap above that).
       const c = new Vector3(1.5, -0.5 * ASPECT, 0).applyMatrix4(mats[3]!);
-      expect(c.x).toBeCloseTo(spineX + 0.5 * Math.cos(Math.PI * p), 6);
+      const above = 0.5 * 0.012;
+      expect(c.x).toBeCloseTo(
+        spineX + 0.5 * Math.cos(Math.PI * p) - above * Math.sin(Math.PI * p),
+        6,
+      );
     }
   });
 
@@ -183,6 +188,61 @@ describe('3D timeline agrees with the 2D plan', () => {
     const centre = turn.start + 3;
     expect(strip(centre, 2).gap).toBeLessThan(1e-9);
     expect(strip(centre, 0).gap).toBeLessThan(1e-9);
+  });
+
+  it('never lets a turning page or a fold cut through another page or fold', () => {
+    // Cross-section through the top edge (y = 0): each leaf is a segment from the spine outwards,
+    // each fold a polyline. No two may cross, at any moment of reading, even exploded.
+    type P = [number, number];
+    const cross = (o: P, a: P, b: P) =>
+      (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const eps = 1e-9;
+    const properlyCross = (p1: P, p2: P, q1: P, q2: P) => {
+      const d1 = cross(q1, q2, p1);
+      const d2 = cross(q1, q2, p2);
+      const d3 = cross(p1, p2, q1);
+      const d4 = cross(p1, p2, q2);
+      return d1 * d2 < -eps && d3 * d4 < -eps;
+    };
+    for (const [id, pages] of [
+      ['saddle-stitch', 12],
+      ['saddle-stitch', 20],
+      ['saddle-stitch-rtl', 12],
+    ] as const) {
+      const r = recipe(id);
+      const tl = buildTimeline(r, buildPlan(r, pages), ASPECT);
+      const read = tl.segments.find((s) => s.kind === 'read')!;
+      const mats = tl.panels.map(() => new Matrix4());
+      const out = new Float32Array(17 * 6);
+      const xz = (v: Vector3): P => [v.x, v.z];
+      for (let t = read.start; t <= read.end + 1e-9; t += 0.05) {
+        tl.poseAt(t, 10, mats);
+        const lines: P[][] = tl.panels.map((p, i) => {
+          // Spine at x = 1 (the fold line), outer edge at x = 0 or 2.
+          const spine = new Vector3(1, 0, 0).applyMatrix4(mats[i]!);
+          const outer = new Vector3(p.col === 0 ? 0 : 2, 0, 0).applyMatrix4(mats[i]!);
+          return [xz(spine), xz(outer)];
+        });
+        for (const seam of tl.seams) {
+          seamStrip(seam, mats[seam.a]!, mats[seam.b]!, 16, out, tl.spineAxisAt(t, 10));
+          lines.push(Array.from({ length: 17 }, (_, k): P => [out[k * 6]!, out[k * 6 + 2]!]));
+        }
+        for (let i = 0; i < lines.length; i++) {
+          for (let j = i + 1; j < lines.length; j++) {
+            const A = lines[i]!;
+            const B = lines[j]!;
+            for (let a = 0; a + 1 < A.length; a++) {
+              for (let b = 0; b + 1 < B.length; b++) {
+                expect(
+                  properlyCross(A[a]!, A[a + 1]!, B[b]!, B[b + 1]!),
+                  `${id} ${pages}p at t=${t.toFixed(2)}: pieces ${i} and ${j} cross`,
+                ).toBe(false);
+              }
+            }
+          }
+        }
+      }
+    }
   });
 
   it('trims the head folds of a signature when reading starts, keeping the spine', () => {

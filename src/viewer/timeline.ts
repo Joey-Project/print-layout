@@ -86,6 +86,16 @@ export interface Timeline {
   aspect: number;
   /** Write each panel's world matrix at time t. `explode` ≥ 1 spreads layers apart. */
   poseAt(t: number, explode: number, out: Matrix4[]): void;
+  /**
+   * The book's spine axis while it is being read (from the closed book on), or null. Every leaf
+   * turns about this one axis, so the folds at the spine are arcs around it.
+   */
+  spineAxisAt(t: number, explode: number): SpineAxis | null;
+}
+
+export interface SpineAxis {
+  origin: [number, number, number];
+  dir: [number, number, number];
 }
 
 interface FlatState {
@@ -450,11 +460,16 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
       if (read && spine && tt > read.start) {
         const rank = leafRank.get(i)!;
         const ur = smooth(tt - read.start - rank);
+        // Like a real book block, every leaf turns about the middle of the spine (half the block's
+        // thickness up), not about its own height. Leaves keep their distance from that axis, so a
+        // turning leaf never cuts through the piles or the folds around the spine, and it still lands
+        // at rank·gap: the mirror of its starting height.
         const zUnturned = (leafCount - 1 - rank) * gap;
-        const zTurned = rank * gap;
+        const axisZ = ((leafCount - 1) / 2) * gap;
         hingeRotation(spine.axis, spine.at, aspect, spine.sign * Math.PI * ur, hinge);
-        m.makeTranslation(0, 0, lerp(zUnturned, zTurned, ur))
+        m.makeTranslation(0, 0, axisZ)
           .multiply(hinge)
+          .multiply(lift.makeTranslation(0, 0, zUnturned - axisZ))
           .multiply(flat);
         return;
       }
@@ -462,7 +477,16 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     });
   }
 
+  function spineAxisAt(time: number, explode: number): SpineAxis | null {
+    if (!read || !spine || time < read.start) return null;
+    const z = ((leafCount - 1) / 2) * BASE_GAP * Math.max(1, explode);
+    return spine.axis === 'x'
+      ? { origin: [spine.at, 0, z], dir: [0, 1, 0] }
+      : { origin: [0, -spine.at * aspect, z], dir: [1, 0, 0] };
+  }
+
   return {
+    spineAxisAt,
     duration,
     segments,
     stops: [...stops].sort((a, b) => a - b),
