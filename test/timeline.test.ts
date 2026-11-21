@@ -197,6 +197,8 @@ describe('3D timeline agrees with the 2D plan', () => {
     const cross = (o: P, a: P, b: P) =>
       (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
     const eps = 1e-9;
+    // Collected and checked once: an expect() per segment pair is far too slow.
+    const crossings: string[] = [];
     const properlyCross = (p1: P, p2: P, q1: P, q2: P) => {
       const d1 = cross(q1, q2, p1);
       const d2 = cross(q1, q2, p2);
@@ -233,16 +235,16 @@ describe('3D timeline agrees with the 2D plan', () => {
             const B = lines[j]!;
             for (let a = 0; a + 1 < A.length; a++) {
               for (let b = 0; b + 1 < B.length; b++) {
-                expect(
-                  properlyCross(A[a]!, A[a + 1]!, B[b]!, B[b + 1]!),
-                  `${id} ${pages}p at t=${t.toFixed(2)}: pieces ${i} and ${j} cross`,
-                ).toBe(false);
+                if (properlyCross(A[a]!, A[a + 1]!, B[b]!, B[b + 1]!)) {
+                  crossings.push(`${id} ${pages}p at t=${t.toFixed(2)}: pieces ${i} and ${j}`);
+                }
               }
             }
           }
         }
       }
     }
+    expect(crossings).toEqual([]);
   });
 
   it('trims the head folds of a signature when reading starts, keeping the spine', () => {
