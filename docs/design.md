@@ -122,10 +122,19 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    starts. Tests assert the visible page at
    every page turn matches the 2D plan and is upright. _(done; next: open-book "spreads" layout,
    paper thickness/creep, PDF page textures)_
-3. **PDF in/out** — load PDF (pdf.js thumbnails on the sheets and 3D faces), physical layout (sheet
-   size, margins, gutters, trim/bleed boxes), export via pdf-lib; duplex flip option.
-4. **Verification** — load an imposed PDF + recipe, reconstruct reading order; optional auto-diff
-   against the source PDF.
+3. **PDF in/out** — open a reading-order PDF (pdf.js renders each page's trim area onto the 2D
+   sheets and the 3D faces); export print-ready PDFs with pdf-lib, pages embedded as clipped
+   vector Form XObjects (`src/pdf`). Presets: home/office duplex (fit to A4/Letter… inside printer
+   margins, back orientation matched to "flip on short/long edge"), manual duplex (fronts and
+   backs as two PDFs, backs optionally reversed) and print shop (exact size, bleed on outer edges,
+   crop and fold marks, sheet labels, TrimBox/BleedBox). Any preset or custom sheet size,
+   orientation, scaling, margin and bleed. Without a PDF it exports a numbered dummy for a paper
+   test. A live preview renders the real exported sheet. _(done)_
+4. **Verification** — open an imposed PDF and proof it: sheet sides are read in duplex,
+   fronts-then-backs or single-sided order (optionally with upside-down backs), cut into panels by
+   the recipe (TrimBox or margins), shown on the sheets, as an upright reading-order strip, and in
+   3D; it can be cut back into a vector reading-order PDF. Tests impose a dummy, de-impose it and
+   read each page's number back with pdf.js. _(done; next: automatic diff against the source PDF)_
 5. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
 6. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
 

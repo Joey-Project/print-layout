@@ -1,4 +1,21 @@
+import { useEffect, useRef } from 'react';
 import type { Grid, Plan, Slot } from '../engine';
+import type { PdfArt } from './pdfArt';
+
+/** Draws a rendered page image, scaled to fill the element. */
+function ArtCanvas({ image, className }: { image: HTMLCanvasElement; className?: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    c.width = Math.max(1, Math.round(r.width * dpr));
+    c.height = Math.max(1, Math.round(r.height * dpr));
+    c.getContext('2d')!.drawImage(image, 0, 0, c.width, c.height);
+  }, [image]);
+  return <canvas ref={ref} className={className ?? 'art'} />;
+}
 
 interface SideProps {
   title: string;
@@ -7,9 +24,11 @@ interface SideProps {
   slots: Slot[];
   hovered: number | null;
   onHover: (position: number | null) => void;
+  /** Panel image for (col, row) of this side, if a PDF is loaded. */
+  art?: (col: number, row: number) => HTMLCanvasElement | null;
 }
 
-function SideView({ title, hint, grid, slots, hovered, onHover }: SideProps) {
+function SideView({ title, hint, grid, slots, hovered, onHover, art }: SideProps) {
   const cells = new Map(slots.map((s) => [`${s.col},${s.row}`, s]));
   return (
     <figure className="side">
@@ -25,6 +44,7 @@ function SideView({ title, hint, grid, slots, hovered, onHover }: SideProps) {
             const s = cells.get(`${col},${row}`);
             if (!s) return <div key={`${col},${row}`} className="panel empty" />;
             const blank = s.page === null;
+            const image = art?.(col, row) ?? null;
             return (
               <div
                 key={`${col},${row}`}
@@ -38,7 +58,11 @@ function SideView({ title, hint, grid, slots, hovered, onHover }: SideProps) {
                       (s.rotation ? ' · printed upside down' : '')
                 }
               >
-                <span className="page-no" style={{ rotate: `${blank ? 0 : s.rotation}deg` }}>
+                {image && <ArtCanvas image={image} />}
+                <span
+                  className={`page-no${image ? ' on-art' : ''}`}
+                  style={{ rotate: `${blank ? 0 : s.rotation}deg` }}
+                >
                   {blank ? 'blank' : s.page}
                 </span>
                 <span className="pos">#{s.position}</span>
@@ -55,13 +79,52 @@ export function PlanView({
   plan,
   hovered,
   onHover,
+  pdfArt = null,
+  showReading = false,
 }: {
   plan: Plan;
   hovered: number | null;
   onHover: (p: number | null) => void;
+  /** Artwork from a loaded PDF. */
+  pdfArt?: PdfArt | null;
+  /** Show the imposed PDF cut back into reading order (proof mode). */
+  showReading?: boolean;
 }) {
+  const style = pdfArt
+    ? ({
+        '--panel-h': `calc(var(--panel-w) * ${pdfArt.aspect})`,
+        '--page-aspect': String(pdfArt.aspect),
+      } as React.CSSProperties)
+    : undefined;
+  const artFor = (sheet: number, side: 'front' | 'back') =>
+    pdfArt ? (col: number, row: number) => pdfArt.art(sheet, side, col, row) : undefined;
   return (
-    <div className="sheets">
+    <div className="sheets" style={style}>
+      {pdfArt && showReading && (
+        <section className="sheet-card reading-strip">
+          <h3>Reading order</h3>
+          <p className="muted small">
+            Each panel cut from the imposed PDF and turned upright, in the order the recipe reads
+            them. Anything out of order or upside down here is wrong on the sheets.
+          </p>
+          <div className="reading-pages">
+            {Array.from({ length: plan.slotCount }, (_, i) => {
+              const image = pdfArt.reading(i + 1);
+              return (
+                <figure
+                  key={i}
+                  className={hovered === i + 1 ? 'hot' : ''}
+                  onMouseEnter={() => onHover(i + 1)}
+                  onMouseLeave={() => onHover(null)}
+                >
+                  {image ? <ArtCanvas image={image} /> : <div className="art pending" />}
+                  <figcaption>{i + 1}</figcaption>
+                </figure>
+              );
+            })}
+          </div>
+        </section>
+      )}
       {plan.sheets.map((sheet, i) => (
         <section key={i} className="sheet-card">
           <h3>Sheet {i + 1}</h3>
@@ -73,6 +136,7 @@ export function PlanView({
               slots={sheet.front}
               hovered={hovered}
               onHover={onHover}
+              art={artFor(i, 'front')}
             />
             {sheet.back.length > 0 ? (
               <SideView
@@ -82,6 +146,7 @@ export function PlanView({
                 slots={sheet.back}
                 hovered={hovered}
                 onHover={onHover}
+                art={artFor(i, 'back')}
               />
             ) : (
               <p className="muted single">Single-sided — back stays blank.</p>
