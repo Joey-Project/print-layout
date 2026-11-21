@@ -2,12 +2,15 @@ import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import {
   fitInPanel,
   layoutSheets,
+  sectionPageSize,
   MM,
   placedPoint,
   placePage,
   PRINT_PRESETS,
   type PrintOptions,
 } from '../src/pdf/geometry';
+import { DEFAULT_IMPOSED, proofLayout, type PdfPageInfo } from '../src/pdf/imposed';
+import type { Gang } from '../src/engine';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
 const A5 = { w: 148 * MM, h: 210 * MM };
@@ -226,5 +229,300 @@ describe('fitting a page of another shape into a panel', () => {
     );
     const [, top] = placedPoint(p, 0, 148);
     expect(f.H - top).toBeCloseTo(f.y, 9); // distance from the panel's top edge
+  });
+});
+
+describe('ganging several sheets onto one printed sheet', () => {
+  const r = recipe('saddle-stitch');
+  // A6 pages: each sheet is an A5 spread; two fit on A4.
+  const A6 = { w: 105 * MM, h: 148 * MM };
+  const plan = buildPlan(r, 16); // 4 recipe sheets
+
+  it('puts two A5 spreads on each side of A4 at 100 %', () => {
+    const l = layoutSheets(
+      plan,
+      A6,
+      opts('home', { scaling: 'actual', margin: 0, gang: { across: 1, down: 2, order: 'stack' } }),
+    );
+    expect(l.warnings).toEqual([]);
+    expect(l.orientation).toBe('portrait');
+    expect(l.gang.papers).toBe(2);
+    expect(l.units).toHaveLength(2);
+    // Stacked vertically, each 210 × 148 mm.
+    expect(l.units[0]![0]!.w / MM).toBeCloseTo(210, 6);
+    expect(l.units[0]![0]!.y).toBeGreaterThan(l.units[1]![0]!.y);
+    // Printed sheet 1 carries recipe sheets 1 and 3 (cut and stack: piles of sheets 1–2 and 3–4).
+    expect([...new Set(l.place(0, 'front').map((p) => p.sheet))].sort()).toEqual([0, 2]);
+  });
+
+  it.each([
+    ['turned like a book page', 'auto'],
+    ['turned top to bottom', 'long'],
+  ] as const)("registers every unit's back behind its front when %s", (_n, flip) => {
+    for (const gang of [
+      { across: 2, down: 1 },
+      { across: 2, down: 2 },
+      { across: 3, down: 1 },
+    ]) {
+      const l = layoutSheets(
+        plan,
+        A6,
+        opts('shop', { flip, bleed: 3, gutter: 4, gang: { ...gang, order: 'stack' } }),
+      );
+      for (let paper = 0; paper < l.gang.papers; paper++) {
+        const front = l.place(paper, 'front');
+        const back = l.place(paper, 'back');
+        for (const b of back) {
+          // The front panel sharing this paper: same recipe sheet, mirrored column.
+          const f = front.find(
+            (x) =>
+              x.sheet === b.sheet &&
+              x.slot.col === r.grid.cols - 1 - b.slot.col &&
+              x.slot.row === b.slot.row,
+          )!;
+          expect(f).toBeDefined();
+          if (l.backRotated) {
+            // Turned top ↔ bottom: front (x, y) is back-page (x, H − y).
+            expect(b.rect.x).toBeCloseTo(f.rect.x, 6);
+            expect(b.rect.y).toBeCloseTo(l.height - (f.rect.y + f.rect.h), 6);
+          } else {
+            // Turned left ↔ right: front (x, y) is back-page (W − x, y).
+            expect(b.rect.x).toBeCloseTo(l.width - (f.rect.x + f.rect.w), 6);
+            expect(b.rect.y).toBeCloseTo(f.rect.y, 6);
+          }
+        }
+      }
+    }
+  });
+
+  it('marks every cut line outside the ganged area, clear of the bleed', () => {
+    const l = layoutSheets(
+      plan,
+      A6,
+      opts('shop', { bleed: 3, gutter: 4, gang: { across: 2, down: 1, order: 'stack' } }),
+    );
+    // Four vertical cut lines (two per unit) × above and below, two horizontal × left and right.
+    expect(l.cropMarks).toHaveLength(4 * 2 + 2 * 2);
+    // A fold in each unit, marked above and below.
+    expect(l.foldMarks).toHaveLength(2 * 2);
+    // Units are 3 + 4 + 3 mm apart.
+    const [a, b] = l.units[0]!;
+    expect((b!.x - (a!.x + a!.w)) / MM).toBeCloseTo(10, 6);
+    for (const m of l.cropMarks) {
+      for (const [x, y] of [
+        [m.x1, m.y1],
+        [m.x2, m.y2],
+      ] as const) {
+        const inside =
+          x > l.bleed.x + 1e-9 &&
+          x < l.bleed.x + l.bleed.w - 1e-9 &&
+          y > l.bleed.y + 1e-9 &&
+          y < l.bleed.y + l.bleed.h - 1e-9;
+        expect(inside).toBe(false);
+      }
+    }
+  });
+});
+
+describe('dividing the sheet into sections (long, narrow pages)', () => {
+  const r = recipe('saddle-stitch');
+  const plan = buildPlan(r, 8); // 2 sheets
+  const thirds = (o: Partial<PrintOptions> = {}) =>
+    opts('home', {
+      sheet: { kind: 'preset', id: 'a4' },
+      sections: { across: 3, down: 1, blank: 'end' },
+      cropMarks: true,
+      foldMarks: true,
+      ...o,
+    });
+
+  it('cuts landscape A4 into three 99 × 210 mm pages: one spread and a blank third', () => {
+    const page = sectionPageSize(thirds(), plan.grid)!;
+    expect(page.w / MM).toBeCloseTo(99, 6);
+    expect(page.h / MM).toBeCloseTo(210, 6);
+    const l = layoutSheets(plan, page, thirds());
+    expect(l.orientation).toBe('landscape');
+    expect(l.scale).toBeCloseTo(1, 9);
+    expect(l.gang.papers).toBe(2);
+    const unit = l.units[0]![0]!;
+    expect([unit.x, unit.w / MM]).toEqual([0, expect.closeTo(198, 6)]);
+    expect(l.blanks).toHaveLength(1);
+    expect(l.blanks[0]!.x / MM).toBeCloseTo(198, 6);
+    // Cut guide at the blank third, fold guide in the spread's middle.
+    expect(l.cropMarks.every((m) => Math.abs(m.x1 / MM - 198) < 1e-6)).toBe(true);
+    expect(l.foldMarks.every((m) => Math.abs(m.x1 / MM - 99) < 1e-6)).toBe(true);
+    // On the back the cut is at the mirrored third.
+    expect(l.marks('back').crop.every((m) => Math.abs(m.x1 / MM - 99) < 1e-6)).toBe(true);
+  });
+
+  it.each(['auto', 'long'] as const)(
+    'registers the back of the spread behind its front (flip %s), blank behind blank',
+    (flip) => {
+      const o = thirds({ flip });
+      const l = layoutSheets(plan, sectionPageSize(o, plan.grid)!, o);
+      for (let paper = 0; paper < l.gang.papers; paper++) {
+        const front = l.place(paper, 'front');
+        for (const b of l.place(paper, 'back')) {
+          const f = front.find(
+            (x) => x.slot.col === r.grid.cols - 1 - b.slot.col && x.slot.row === b.slot.row,
+          )!;
+          if (l.backRotated) {
+            expect(b.rect.x).toBeCloseTo(f.rect.x, 6);
+            expect(b.rect.y).toBeCloseTo(l.height - (f.rect.y + f.rect.h), 6);
+          } else {
+            expect(b.rect.x).toBeCloseTo(l.width - (f.rect.x + f.rect.w), 6);
+            expect(b.rect.y).toBeCloseTo(f.rect.y, 6);
+          }
+        }
+        // The printed area is the same physical two thirds on both sides.
+        const span = (ps: typeof front): [number, number] => [
+          Math.min(...ps.map((p) => p.rect.x)),
+          Math.max(...ps.map((p) => p.rect.x + p.rect.w)),
+        ];
+        const [bx0, bx1] = span(l.place(paper, 'back'));
+        const [fx0, fx1] = span(front);
+        if (!l.backRotated) {
+          expect(bx0).toBeCloseTo(l.width - fx1, 6);
+          expect(bx1).toBeCloseTo(l.width - fx0, 6);
+        }
+      }
+    },
+  );
+
+  it('blank at the start puts the spread in the last two thirds', () => {
+    const o = thirds({ sections: { across: 3, down: 1, blank: 'start' } });
+    const l = layoutSheets(plan, sectionPageSize(o, plan.grid)!, o);
+    expect(l.units[0]![0]!.x / MM).toBeCloseTo(99, 6);
+    expect(l.blanks[0]!.x).toBe(0);
+  });
+
+  it('fits several spreads when the sections allow, cut and stack', () => {
+    const big = buildPlan(r, 16); // 4 sheets
+    const o = thirds({
+      sections: { across: 4, down: 2, blank: 'end' },
+      sheet: { kind: 'preset', id: 'a3' },
+    });
+    const l = layoutSheets(big, sectionPageSize(o, big.grid)!, o);
+    expect(l.gang.units).toBe(4);
+    expect(l.gang.papers).toBe(1);
+    expect(l.blanks).toEqual([]);
+  });
+
+  it('sizes pages from the section grid grown to fit the spread', () => {
+    // 3 × 1 sections cannot hold a 2 × 2 signature: the layout uses 3 × 2, so do the pages.
+    const sig = buildPlan(recipe('signature-8'), 8);
+    expect(sig.grid).toEqual({ cols: 2, rows: 2 });
+    const o = thirds();
+    const page = sectionPageSize(o, sig.grid)!;
+    expect(page.w / MM).toBeCloseTo(99, 6);
+    expect(page.h / MM).toBeCloseTo(105, 6);
+    const l = layoutSheets(sig, page, o);
+    expect(l.scale).toBeCloseTo(1, 9);
+    expect(l.warnings.some((w) => w.includes('fitted'))).toBe(false);
+  });
+});
+
+describe('proofing an imposed PDF with an asymmetric imposed area', () => {
+  // A4 landscape sheets with no TrimBox: the area comes from the insets alone.
+  const sheet: PdfPageInfo = {
+    rotate: 0,
+    crop: { x: 0, y: 0, w: 297 * MM, h: 210 * MM },
+    trim: { x: 0, y: 0, w: 297 * MM, h: 210 * MM },
+    hasTrim: false,
+    unit: 1,
+  };
+  const plan = buildPlan(recipe('saddle-stitch'), 4); // one sheet, 2 × 1
+  const L = (10 * MM) / sheet.crop.w; // 10 mm left inset, none on the right
+  const T = (6 * MM) / sheet.crop.h; // 6 mm top inset, none at the bottom
+  const inset = { top: 6, right: 0, bottom: 0, left: 10 };
+  const within = (r: { x: number; y: number; w: number; h: number }) => {
+    expect(r.x).toBeGreaterThanOrEqual(L - 1e-9);
+    expect(r.x + r.w).toBeLessThanOrEqual(1 + 1e-9);
+    expect(r.y).toBeGreaterThanOrEqual(T - 1e-9);
+    expect(r.y + r.h).toBeLessThanOrEqual(1 + 1e-9);
+  };
+
+  it.each([false, true])('keeps the back inside its own area (backs upside down: %s)', (rot) => {
+    const proof = proofLayout([sheet, sheet], plan, {
+      ...DEFAULT_IMPOSED,
+      inset,
+      backRotated: rot,
+    });
+    const half = (1 - L) / 2;
+    for (const side of ['front', 'back'] as const) {
+      const panels = [0, 1].map((col) => proof.region(0, side, col, 0)!);
+      panels.forEach((p) => within(p.rect));
+      // The two panels tile the area exactly.
+      expect(panels.map((p) => p.rect.w)).toEqual([half, half].map((h) => expect.closeTo(h, 9)));
+      const xs = panels.map((p) => p.rect.x).sort((a, b) => a - b);
+      expect(xs[0]).toBeCloseTo(L, 9);
+      expect(xs[1]).toBeCloseTo(L + half, 9);
+    }
+    // Upright backs: the back's first column is on the left; upside down, it is on the right.
+    const back0 = proof.region(0, 'back', 0, 0)!;
+    expect(back0.rect.x).toBeCloseTo(rot ? L + half : L, 9);
+    expect(back0.turn).toBe(rot ? 180 : 0);
+  });
+
+  it('places several per sheet inside the area, back columns mirrored within it', () => {
+    const two = buildPlan(recipe('saddle-stitch'), 8); // two sheets, side by side
+    const proof = proofLayout([sheet, sheet], two, {
+      ...DEFAULT_IMPOSED,
+      inset,
+      gang: { across: 2, down: 1, order: 'stack' },
+    });
+    const unitW = (1 - L) / 2;
+    for (const s of [0, 1]) {
+      const front = proof.region(s, 'front', 0, 0)!.rect;
+      const back = proof.region(s, 'back', 0, 0)!.rect;
+      within(front);
+      within(back);
+      // Sheet s is in column s on the front and in the mirrored column on the back.
+      expect(front.x).toBeCloseTo(L + s * unitW, 9);
+      expect(back.x).toBeCloseTo(L + (1 - s) * unitW, 9);
+    }
+  });
+});
+
+describe('proofing finds the exported panels exactly', () => {
+  const r = recipe('saddle-stitch');
+  const plan = buildPlan(r, 16); // 4 recipe sheets
+  const A6 = { w: 105 * MM, h: 148 * MM };
+  it.each([
+    ['two across', { across: 2, down: 1, order: 'stack' } as Gang, 'auto' as const],
+    ['2 × 2, backs top-to-bottom', { across: 2, down: 2, order: 'stack' } as Gang, 'long' as const],
+  ])('%s, with bleed and a cutting gap', (_n, gang, flip) => {
+    const o = opts('shop', { bleed: 3, gutter: 4, gang, flip });
+    const l = layoutSheets(plan, A6, o);
+    // The exported page as the proofing reads it: the sheet, with the layout's TrimBox.
+    const info: PdfPageInfo = {
+      rotate: 0,
+      crop: { x: 0, y: 0, w: l.width, h: l.height },
+      trim: l.trim,
+      hasTrim: true,
+      unit: 1,
+    };
+    const pages = Array.from({ length: 2 * l.gang.papers }, () => info);
+    const proof = proofLayout(pages, plan, {
+      ...DEFAULT_IMPOSED,
+      backRotated: l.backRotated,
+      gang,
+      gutter: 4,
+      bleed: 3,
+    });
+    for (let paper = 0; paper < l.gang.papers; paper++) {
+      for (const side of ['front', 'back'] as const) {
+        for (const placed of l.place(paper, side)) {
+          const got = proof.region(placed.sheet, side, placed.slot.col, placed.slot.row)!;
+          expect(got.index).toBe(paper * 2 + (side === 'back' ? 1 : 0));
+          // Displayed fractions (y down) back to points (y up).
+          const x = got.rect.x * l.width;
+          const y = l.height - (got.rect.y + got.rect.h) * l.height;
+          expect(x / MM).toBeCloseTo(placed.rect.x / MM, 6);
+          expect(y / MM).toBeCloseTo(placed.rect.y / MM, 6);
+          expect((got.rect.w * l.width) / MM).toBeCloseTo(105, 6);
+        }
+      }
+    }
   });
 });

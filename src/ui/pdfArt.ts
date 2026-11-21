@@ -12,9 +12,8 @@ import type { Plan } from '../engine';
 import {
   boxToDisplayed,
   displayedSize,
-  imposedArea,
-  panelRegion,
-  sideMap,
+  physicalSize,
+  proofLayout,
   slotsByPosition,
   type ImposedOptions,
   type PdfPageInfo,
@@ -171,22 +170,15 @@ export function usePdfArt(
       };
     }
 
-    const sides = sideMap(pdf.info.length, imposed.order);
-    const region = (sheet: number, side: 'front' | 'back', col: number, row: number) => {
-      const index = sides.pageOf(sheet, side);
-      if (index === null) return null;
-      const info = pdf.info[index]!;
-      return {
-        index,
-        ...panelRegion(imposedArea(info, imposed), plan.grid, col, row, side, imposed),
-      };
-    };
-    const first = pdf.info[0];
+    const proof = proofLayout(pdf.info, plan, imposed);
+    const region = proof.region;
+    // Page shape: one panel of the first sheet, in physical units.
     let aspect = Math.SQRT2;
-    if (first) {
-      const area = imposedArea(first, imposed);
-      const size = displayedSize(first.crop, first.rotate);
-      aspect = (area.h * size.h * plan.grid.cols) / (area.w * size.w * plan.grid.rows);
+    const r0 = region(0, 'front', 0, 0);
+    if (r0) {
+      const info = pdf.info[r0.index]!;
+      const size = physicalSize(info, info.crop);
+      aspect = (r0.rect.h * size.h) / (r0.rect.w * size.w);
     }
     const key = (r: { index: number; rect: Rect }, turn: number) =>
       `${r.index}:${r.rect.x}:${r.rect.y}:${r.rect.w}:${r.rect.h}:${turn}`;

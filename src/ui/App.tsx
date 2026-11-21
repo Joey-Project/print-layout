@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPlan,
   builtinRecipes,
+  NO_GANG,
+  paperPlan,
   pagesPerSheet,
   ImpositionError,
   recipeProblems,
@@ -10,7 +12,8 @@ import {
   type Recipe,
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
-import { DEFAULT_IMPOSED, sideMap, type ImposedOptions } from '../pdf/imposed';
+import { sectionPageSize } from '../pdf/geometry';
+import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../pdf/imposed';
 import { usePdfArt, type LoadedPdf } from './pdfArt';
 import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
 import { SourcePanel } from './SourcePanel';
@@ -70,12 +73,21 @@ export function App() {
   const active = draft.ok ? draft.recipe : (reportRecipe ?? selected);
   const edited = text !== pretty(selected);
 
-  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet.
+  // Proofing: printed sheets × parts per sheet (several per sheet, or sections) = recipe sheets.
+  // Fewer pages fit only while they fill the same printed sheets.
+  const proofRange =
+    pdf?.mode === 'imposed' ? proofSheetRange(pdf.info.length, active.grid, imposed) : null;
+  const proofPagesMax = proofRange ? Math.max(1, proofRange.max) * pagesPerSheet(active) : 0;
+  const proofPagesMin = proofRange
+    ? Math.max(1, (proofRange.min - 1) * pagesPerSheet(active) + 1)
+    : 1;
+  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet,
+  // fewer when the last printed sheets have empty positions.
   const effectivePages = useMemo(() => {
     if (!pdf) return pageCount;
     if (pdf.mode === 'reading') return pdf.info.length;
-    return Math.max(1, sideMap(pdf.info.length, imposed.order).sheetCount) * pagesPerSheet(active);
-  }, [pdf, pageCount, imposed.order, active]);
+    return Math.max(proofPagesMin, Math.min(proofPagesMax, imposed.pages ?? proofPagesMax));
+  }, [pdf, pageCount, imposed.pages, proofPagesMin, proofPagesMax]);
 
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
     try {
@@ -123,6 +135,38 @@ export function App() {
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
   const pdfArt = usePdfArt(pdf, plan, imposed);
+  // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
+  const printGang = print.options.gang ?? NO_GANG;
+  // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
+  const section = plan ? sectionPageSize(print.options, plan.grid) : null;
+  const sectionAspect = section ? section.h / section.w : null;
+  const printSections =
+    print.options.sheet.kind === 'fit' ? null : (print.options.sections ?? null);
+  const proofGang = imposed.gang ?? NO_GANG;
+  const proofSections = imposed.sections ?? null;
+  const gang = useMemo(() => {
+    if (!plan) return null;
+    // Proofing an imposed PDF: start from its printed sheets, cut the way it says.
+    if (pdf?.mode === 'imposed') {
+      return paperPlan(plan.sheets.length, plan.grid, proofGang, proofSections);
+    }
+    return paperPlan(plan.sheets.length, plan.grid, printGang, printSections);
+  }, [
+    plan,
+    pdf?.mode,
+    printGang.across,
+    printGang.down,
+    printGang.order,
+    printSections?.across,
+    printSections?.down,
+    printSections?.blank,
+    proofGang.across,
+    proofGang.down,
+    proofGang.order,
+    proofSections?.across,
+    proofSections?.down,
+    proofSections?.blank,
+  ]);
 
   // ---- Bug reports. ----
   const buildReport = (note: string): { report: DebugReport; screenshot: string | null } => {
@@ -286,18 +330,26 @@ export function App() {
 
         <div className="row">
           <label>
-            Pages in source PDF
+            {pdf?.mode === 'imposed' ? 'Pages in the book' : 'Pages in source PDF'}
             <input
               type="number"
-              min={1}
-              max={999}
+              min={pdf?.mode === 'imposed' ? proofPagesMin : 1}
+              max={pdf?.mode === 'imposed' ? proofPagesMax : 999}
               value={effectivePages}
-              disabled={pdf !== null}
-              title={pdf ? 'Set by the loaded PDF' : undefined}
+              disabled={pdf?.mode === 'reading'}
+              title={
+                pdf?.mode === 'reading'
+                  ? 'Set by the loaded PDF'
+                  : pdf
+                    ? `${proofPagesMin}–${proofPagesMax}: fewer when the last printed sheets have empty positions`
+                    : undefined
+              }
               onChange={(e) => {
                 const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
                 logEvent('pageCount', { value: n });
-                setPageCount(n);
+                if (pdf?.mode === 'imposed')
+                  setImposed({ ...imposed, pages: n >= proofPagesMax ? undefined : n });
+                else setPageCount(n);
               }}
             />
           </label>
@@ -318,6 +370,8 @@ export function App() {
           onOpen={(p) => {
             logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
             setPdf(p);
+            // A new imposed PDF: every position holds a sheet until told otherwise.
+            if (imposed.pages !== undefined) setImposed({ ...imposed, pages: undefined });
             setView(p.mode === 'imposed' ? '2d' : view);
           }}
           onClose={() => {
@@ -429,7 +483,9 @@ export function App() {
                   onRestored={clearRestore}
                   art={pdfArt?.art ?? null}
                   artVersion={pdfArt?.version ?? 0}
-                  pdfAspect={pdfArt?.aspect ?? null}
+                  pdfAspect={pdfArt?.aspect ?? sectionAspect}
+                  pdfAspectLabel={pdfArt ? 'From PDF' : 'From print sections'}
+                  gang={gang}
                 />
               )}
             </>

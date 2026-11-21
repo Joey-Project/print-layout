@@ -550,3 +550,35 @@ label.inline {
   background: #fff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.18);
 }
+
+.gang {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px 12px;
+  margin: 0;
+}
+.gang legend {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.gang input[type='number'] {
+  width: 5.5em;
+}
+.gang .wide {
+  flex-basis: 100%;
+}
+.row3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.row3 input,
+.row3 select {
+  width: 100%;
+  min-width: 0;
+}

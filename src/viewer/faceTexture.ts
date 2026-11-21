@@ -103,3 +103,30 @@ function imageTexture(image: CanvasImageSource, sheet: number, aspect: number): 
   tex.anisotropy = 4;
   return tex;
 }
+
+/** A blank section that is cut off after printing: hatched, labelled. `w`, `h` in world units. */
+export function wasteTexture(w: number, h: number): CanvasTexture {
+  const px = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(8, Math.round(px * w));
+  canvas.height = Math.max(8, Math.round(px * h));
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#f1eee7';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#d8d2c6';
+  ctx.lineWidth = 6;
+  for (let x = -canvas.height; x < canvas.width; x += 22) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + canvas.height, canvas.height);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#8a8477';
+  ctx.font = '600 28px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('cut off', canvas.width / 2, canvas.height / 2);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
+}

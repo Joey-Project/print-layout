@@ -6,7 +6,17 @@
  * shows it, after its /Rotate — so they apply equally to a rendered canvas and, converted back
  * with `displayedToUser`, to the PDF's own user space.
  */
-import type { Grid, Plan, Rotation, Slot } from '../engine';
+import {
+  NO_GANG,
+  paperPlan,
+  type Gang,
+  type Grid,
+  type PaperPlan,
+  type Plan,
+  type Rotation,
+  type Sections,
+  type Slot,
+} from '../engine';
 import { MM, type Rect } from './geometry';
 
 export interface ImposedOptions {
@@ -18,6 +28,21 @@ export interface ImposedOptions {
   useTrimBox: boolean;
   /** Extra inset from that area, mm (to skip a margin with marks). */
   inset: { top: number; right: number; bottom: number; left: number };
+  /** The printed sheets come in reverse order in the PDF (last sheet first). */
+  reversed?: boolean;
+  /** Several recipe sheets per printed sheet, cut apart (cut and stack, or copies). */
+  gang?: Gang;
+  /** Cutting gap between those parts, mm. */
+  gutter?: number;
+  /** Bleed around each part, mm: as exported, parts are 2 × bleed + the cutting gap apart. */
+  bleed?: number;
+  /**
+   * Pages in the book, when the last printed sheets have empty positions (the PDF alone cannot tell
+   * an empty position from a blank sheet). Unset: every position holds a sheet.
+   */
+  pages?: number;
+  /** The printed sheet is divided into equal sections, one page each (blank ones cut off). */
+  sections?: Sections | null;
 }
 
 export const DEFAULT_IMPOSED: ImposedOptions = {
@@ -198,4 +223,110 @@ export function slotsByPosition(plan: Plan) {
     }
   });
   return map;
+}
+
+/** Where a panel of a recipe sheet is in an imposed PDF. */
+export interface ProofRegion {
+  /** PDF page (0-based). */
+  index: number;
+  /** Displayed fraction rectangle on that page. */
+  rect: Rect;
+  /** Turn (clockwise) bringing it into the side's view. */
+  turn: Rotation;
+}
+
+export interface ProofLayout {
+  paper: PaperPlan;
+  /** Printed sheets the PDF holds. */
+  printed: number;
+  /** Recipe sheets those make (what the plan should be built for). */
+  sheets: number;
+  region(sheet: number, side: 'front' | 'back', col: number, row: number): ProofRegion | null;
+}
+
+/** Recipe sheets an imposed PDF of `pdfPages` pages holds, for these options. */
+export function proofSheetCount(pdfPages: number, grid: Grid, o: ImposedOptions) {
+  return proofSheetRange(pdfPages, grid, o).max;
+}
+
+/**
+ * Recipe sheets an imposed PDF can hold: every position filled (max), down to only the first
+ * position of the last printed sheet (min, cut and stack). Any count in between fills the same
+ * printed sheets, so the PDF maps the same way.
+ */
+export function proofSheetRange(pdfPages: number, grid: Grid, o: ImposedOptions) {
+  const printed = sideMap(pdfPages, o.order).sheetCount;
+  const units = paperPlan(1, grid, o.gang ?? NO_GANG, o.sections ?? null).gang.units;
+  if ((o.gang ?? NO_GANG).order === 'copies' || printed === 0)
+    return { min: printed, max: printed };
+  return { min: (printed - 1) * units + 1, max: printed * units };
+}
+
+/**
+ * How an imposed PDF maps back onto the plan: which printed sheet (PDF page) holds each recipe
+ * sheet, where its part sits on that page (several per sheet, or sections), and where each panel
+ * is in it. Mirrors the export's layout: a part's back is its front mirrored about the page's
+ * centre, and a back printed for a top ↔ bottom flip is turned 180° on the page.
+ */
+export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions): ProofLayout {
+  const { cols, rows } = plan.grid;
+  const paper = paperPlan(plan.sheets.length, plan.grid, o.gang ?? NO_GANG, o.sections ?? null);
+  const sides = sideMap(info.length, o.order);
+  const { across, down } = paper.gang.gang;
+  return {
+    paper,
+    printed: sides.sheetCount,
+    sheets: proofSheetCount(info.length, plan.grid, o),
+    region(sheet, side, col, row) {
+      const at = paper.gang.placeOf(sheet);
+      const printedSheet = o.reversed ? sides.sheetCount - 1 - at.paper : at.paper;
+      if (printedSheet < 0) return null;
+      const index = sides.pageOf(printedSheet, side);
+      if (index === null) return null;
+      const page = info[index]!;
+      // The imposed area on this page (sections run to the page's edges), and the part's rectangle
+      // in it as seen from this side (displayed fractions).
+      const area: Rect = paper.sectioned ? { x: 0, y: 0, w: 1, h: 1 } : imposedArea(page, o);
+      // A back is the front turned over left ↔ right, so its parts run in mirrored columns.
+      const ucol = side === 'back' ? across - 1 - at.col : at.col;
+      let unit: Rect;
+      if (paper.sectioned) {
+        const p = paper.paper;
+        const cell = p.unitCell(at.col, at.row);
+        const x = cell.col / p.across;
+        const w = cols / p.across;
+        unit = {
+          x: side === 'back' ? 1 - x - w : x,
+          y: cell.row / p.down,
+          w,
+          h: rows / p.down,
+        };
+      } else {
+        const size = physicalSize(page, page.crop);
+        const space = (2 * Math.max(0, o.bleed ?? 0) + Math.max(0, o.gutter ?? 0)) * MM;
+        const gx = space / size.w;
+        const gy = space / size.h;
+        const uw = (area.w - (across - 1) * gx) / across;
+        const uh = (area.h - (down - 1) * gy) / down;
+        unit = { x: area.x + ucol * (uw + gx), y: area.y + at.row * (uh + gy), w: uw, h: uh };
+      }
+      const pw = unit.w / cols;
+      const ph = unit.h / rows;
+      const rect = { x: unit.x + col * pw, y: unit.y + row * ph, w: pw, h: ph };
+      if (side === 'back' && o.backRotated) {
+        // Printed upside down: turned 180° within the imposed area.
+        return {
+          index,
+          rect: {
+            x: 2 * area.x + area.w - rect.x - rect.w,
+            y: 2 * area.y + area.h - rect.y - rect.h,
+            w: rect.w,
+            h: rect.h,
+          },
+          turn: 180,
+        };
+      }
+      return { index, rect, turn: 0 };
+    },
+  };
 }

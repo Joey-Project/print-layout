@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { Plan, Recipe, Slot } from '../engine';
+import type { PaperPlan, Plan, Recipe, Slot } from '../engine';
 import type { PanelArt } from './pdfArt';
 import {
   logEvent,
@@ -10,7 +10,7 @@ import {
   type ViewerSnapshot,
   type ViewerState,
 } from './debugReport';
-import { faceTexture, seamTexture } from '../viewer/faceTexture';
+import { faceTexture, seamTexture, wasteTexture } from '../viewer/faceTexture';
 import { seamStrip } from '../viewer/seams';
 import { buildTimeline, type PageTurn, type Seam, type Timeline } from '../viewer/timeline';
 
@@ -59,6 +59,8 @@ interface SceneState {
   groups: THREE.Group[];
   faces: FaceMesh[];
   seams: SeamMesh[];
+  /** Blank sections cut off the printed sheets. */
+  waste: THREE.Mesh[];
   mats: THREE.Matrix4[];
 }
 
@@ -111,6 +113,15 @@ interface Three {
 
 const vec = (v: THREE.Vector3): [number, number, number] => [v.x, v.y, v.z];
 
+/** Bounds of the visible meshes under `root` (Box3.setFromObject counts hidden ones too). */
+function visibleBounds(root: THREE.Object3D, out: THREE.Box3) {
+  out.makeEmpty();
+  root.traverseVisible((o) => {
+    if ((o as THREE.Mesh).isMesh) out.expandByObject(o);
+  });
+  return out;
+}
+
 export function BookView3D({
   recipe,
   plan,
@@ -120,6 +131,8 @@ export function BookView3D({
   art = null,
   artVersion = 0,
   pdfAspect = null,
+  pdfAspectLabel = 'From PDF',
+  gang = null,
 }: {
   recipe: Recipe;
   plan: Plan;
@@ -127,8 +140,15 @@ export function BookView3D({
   art?: PanelArt | null;
   /** Changes whenever more artwork is available. */
   artVersion?: number;
-  /** Page height / width of the loaded PDF; offered as the "From PDF" page shape. */
+  /** Page height / width of the loaded PDF (or of the print sections); offered as a page shape. */
   pdfAspect?: number | null;
+  /** Name of that page shape in the menu. */
+  pdfAspectLabel?: string;
+  /**
+   * How sheets are printed (from the print settings): several per printed sheet, or sections with
+   * blank ones. The model then starts by cutting the printed sheets.
+   */
+  gang?: PaperPlan | null;
   /** Filled with a handle that snapshots the viewer for bug reports. */
   debug?: React.RefObject<ViewerDebug | null>;
   /** Viewer state to restore (from a loaded bug report); `onRestored` fires once applied. */
@@ -144,11 +164,11 @@ export function BookView3D({
   const aspect = shape === -1 && pdfAspect ? pdfAspect : PAGE_SHAPES[Math.max(0, shape)]!.aspect;
   const built = useMemo((): { tl: Timeline } | { error: string } => {
     try {
-      return { tl: buildTimeline(recipe, plan, aspect) };
+      return { tl: buildTimeline(recipe, plan, aspect, gang) };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
-  }, [recipe, plan, aspect]);
+  }, [recipe, plan, aspect, gang]);
   const tl = 'tl' in built ? built.tl : null;
 
   const [time, setTime] = useState(0);
@@ -369,6 +389,9 @@ export function BookView3D({
         }
         s.tl.poseAt(t, L.explode, s.mats);
         s.groups.forEach((g, i) => g.matrix.copy(s.mats[i]!));
+        s.waste.forEach((mesh, i) => {
+          mesh.visible = s.tl.wasteAt(i, t, mesh.matrix);
+        });
         for (const sm of s.seams) {
           // Each section's folds wrap round that section's own spine axis.
           const axis = s.tl.spineAxisAt(t, L.explode, sm.seam.a);
@@ -390,7 +413,8 @@ export function BookView3D({
         group.updateMatrixWorld(true);
 
         if ((L.autoFrame || L.snap) && !drag) {
-          box.setFromObject(group);
+          // Only what is shown: cut-off waste and cut seams stay in the group, hidden.
+          visibleBounds(group, box);
           if (!box.isEmpty()) {
             box.getCenter(center);
             box.getSize(size);
@@ -499,7 +523,27 @@ export function BookView3D({
     });
     const seams = tl.seams.map((seam) => seamMesh(seam, tl.panels[seam.a]!.sheet));
     for (const sm of seams) group.add(sm.mesh);
-    scene.current = { tl, groups, faces, seams, mats: tl.panels.map(() => new THREE.Matrix4()) };
+    const waste = tl.waste.map((w) => {
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(w.w, w.h * aspect).translate(w.w / 2, (-w.h * aspect) / 2, 0),
+        new THREE.MeshLambertMaterial({
+          map: wasteTexture(w.w, w.h * aspect),
+          side: THREE.DoubleSide,
+        }),
+      );
+      mesh.matrixAutoUpdate = false;
+      mesh.visible = false;
+      group.add(mesh);
+      return mesh;
+    });
+    scene.current = {
+      tl,
+      groups,
+      faces,
+      seams,
+      waste,
+      mats: tl.panels.map(() => new THREE.Matrix4()),
+    };
     artApplied.current = art;
     artSeen.current = new Map(
       faces.map((f) => [f.mesh, art?.(f.sheet, f.side, f.col, f.row) ?? null] as const),
@@ -788,7 +832,7 @@ export function BookView3D({
               setShape(Number(e.target.value));
             }}
           >
-            {pdfAspect && <option value={-1}>From PDF</option>}
+            {pdfAspect && <option value={-1}>{pdfAspectLabel}</option>}
             {PAGE_SHAPES.map((s, i) => (
               <option key={s.label} value={i}>
                 {s.label}

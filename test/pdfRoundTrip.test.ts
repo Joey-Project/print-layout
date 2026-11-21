@@ -1,6 +1,6 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
-import { DEFAULT_IMPOSED, type ImposedOptions } from '../src/pdf/imposed';
+import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../src/pdf/imposed';
 import {
   decodePDFRawStream,
   PDFArray,
@@ -329,5 +329,203 @@ describe('PDF export and de-imposition round trip', () => {
       '7',
       '8',
     ]);
+  });
+  it.each([
+    ['book-page turn', 'auto'],
+    ['top-to-bottom turn', 'long'],
+  ] as const)('gangs two spreads per printed sheet (%s)', async (_n, flip) => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 16);
+    const A6 = { w: 105 * MM, h: 148 * MM };
+    const { files, layout } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A6,
+      options: opts('home', { flip, gang: { across: 1, down: 2, order: 'stack' } }),
+      baseName: 'test',
+    });
+    expect(layout.gang.papers).toBe(2);
+    const pages = await visibleNumbers(files[0]!.bytes);
+    expect(pages).toHaveLength(4);
+    for (let paper = 0; paper < 2; paper++) {
+      for (const side of ['front', 'back'] as const) {
+        const want = layout
+          .place(paper, side)
+          .filter((p) => p.slot.page !== null)
+          .map((p) => `${p.slot.page}${p.rotation ? '↻' : ''}`)
+          .sort();
+        expect(pages[paper * 2 + (side === 'back' ? 1 : 0)]!.sort()).toEqual(want);
+      }
+    }
+    // Printed sheet 1's front: the outer spread of each pile (16|1 and 12|5).
+    expect(pages[0]!.sort()).toEqual(['1', '12', '16', '5']);
+  });
+  it('exports a sheet divided into thirds: spread in two, blank third', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const options = opts('home', {
+      sheet: { kind: 'preset', id: 'a4' },
+      sections: { across: 3, down: 1, blank: 'end' },
+    });
+    const { files, layout } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options,
+      baseName: 'test',
+    });
+    const doc = await loadPdf(files[0]!.bytes);
+    expect(doc.getPageCount()).toBe(4);
+    expect(doc.getPage(0).getWidth() / MM).toBeCloseTo(297, 3);
+    // The boxes follow each side's pages: the left two thirds on the front, the right on the back.
+    for (const [i, x] of [
+      [0, 0],
+      [1, 99],
+    ] as const) {
+      const trim = doc.getPage(i).getTrimBox();
+      expect(trim.x / MM).toBeCloseTo(x, 3);
+      expect(trim.width / MM).toBeCloseTo(198, 3);
+      expect(doc.getPage(i).getBleedBox().x / MM).toBeCloseTo(x, 3);
+    }
+    const pages = await visibleNumbers(files[0]!.bytes);
+    expect(pages.map((p) => p.sort())).toEqual([
+      ['1', '8'],
+      ['2', '7'],
+      ['3', '6'],
+      ['4', '5'],
+    ]);
+    expect(layout.scale).toBeCloseTo(1, 9); // the dummy is sized to the sections
+  });
+  it('draws no bleed on a sheet in sections, even with bleed set', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const options = opts('home', {
+      sheet: { kind: 'preset', id: 'a4' },
+      sections: { across: 3, down: 1, blank: 'end' },
+      bleed: 3,
+    });
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options,
+      baseName: 'test',
+    });
+    const doc = await loadPdf(files[0]!.bytes);
+    const widths = doc.getPages().flatMap((page) => {
+      const xobjects = page.node.Resources()!.lookup(PDFName.of('XObject'), PDFDict);
+      return xobjects.values().map((ref) => {
+        const bbox = (doc.context.lookup(ref) as PDFRawStream).dict.lookup(
+          PDFName.of('BBox'),
+          PDFArray,
+        );
+        const n = (i: number) => bbox.lookup(i, PDFNumber).asNumber();
+        return (n(2) - n(0)) / MM;
+      });
+    });
+    expect(widths).toHaveLength(8);
+    // Each page is clipped to its 99 mm section: nothing spills over the cuts.
+    for (const w of widths) expect(w).toBeCloseTo(99, 3);
+  });
+  it.each([
+    ['two per sheet, cut and stack', { gang: { across: 2, down: 1, order: 'stack' } }, {}],
+    [
+      '2 × 2, backs top-to-bottom',
+      { gang: { across: 2, down: 2, order: 'stack' }, flip: 'long' },
+      { backRotated: true },
+    ],
+    [
+      'sheet in thirds, blank third',
+      { sheet: { kind: 'preset', id: 'a4' }, sections: { across: 3, down: 1, blank: 'end' } },
+      {},
+    ],
+  ] as const)(
+    'proofs a ganged imposed PDF back into reading order (%s)',
+    async (_n, print, proof) => {
+      const r = recipe('saddle-stitch');
+      const plan = buildPlan(r, 16);
+      const A6 = { w: 105 * MM, h: 148 * MM };
+      const options = opts('shop', { ...print, gutter: 4 } as Partial<PrintOptions>);
+      const { files } = await exportImposed({
+        plan,
+        recipe: r,
+        source: null,
+        dummyPageSize: A6,
+        options,
+        baseName: 'test',
+      });
+      const back = await deimposePdf(
+        files[0]!.bytes,
+        plan,
+        {
+          ...DEFAULT_IMPOSED,
+          ...proof,
+          gang: options.gang,
+          gutter: options.gutter,
+          bleed: options.bleed,
+          sections: options.sections,
+        },
+        'test',
+      );
+      const reading = await visibleNumbers(back.bytes);
+      expect(reading.map((n) => n.join())).toEqual(
+        Array.from({ length: 16 }, (_, i) => String(i + 1)),
+      );
+    },
+  );
+
+  it('proofs an imposed PDF whose printed sheets are in reverse order', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options: opts('home'),
+      baseName: 'test',
+    });
+    // Reverse the printed sheets (pairs of pages).
+    const src = await loadPdf(files[0]!.bytes);
+    const rev = await PDFDocument.create();
+    const order = [4, 5, 2, 3, 0, 1];
+    for (const p of await rev.copyPages(src, order)) rev.addPage(p);
+    const bytes = await rev.save();
+    const wrong = await visibleNumbers(
+      (await deimposePdf(bytes, plan, DEFAULT_IMPOSED, 't')).bytes,
+    );
+    expect(wrong.map((n) => n.join())).not.toEqual(
+      Array.from({ length: 12 }, (_, i) => String(i + 1)),
+    );
+    const right = await visibleNumbers(
+      (await deimposePdf(bytes, plan, { ...DEFAULT_IMPOSED, reversed: true }, 't')).bytes,
+    );
+    expect(right.map((n) => n.join())).toEqual(Array.from({ length: 12 }, (_, i) => String(i + 1)));
+  });
+
+  it('proofs a sheet whose last printed sheet has an empty position', async () => {
+    // 12 pages two per sheet: three recipe sheets on two printed sheets, one position empty.
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const options = opts('home', { gang: { across: 2, down: 1, order: 'stack' } });
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: { w: 105 * MM, h: 148 * MM },
+      options,
+      baseName: 'test',
+    });
+    const proof = { ...DEFAULT_IMPOSED, gang: options.gang, gutter: options.gutter };
+    expect(proofSheetRange(4, plan.grid, proof)).toEqual({ min: 3, max: 4 });
+    const reading = await visibleNumbers(
+      (await deimposePdf(files[0]!.bytes, plan, proof, 't')).bytes,
+    );
+    expect(reading.map((n) => n.join())).toEqual(
+      Array.from({ length: 12 }, (_, i) => String(i + 1)),
+    );
   });
 });

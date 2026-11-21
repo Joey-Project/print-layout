@@ -61,6 +61,17 @@ export function SourcePanel({
       : physicalSize(first, first.crop)
     : null;
   const inset = imposed.inset;
+  const gang = imposed.gang ?? { across: 1, down: 1, order: 'stack' as const };
+  const sections = imposed.sections ?? { across: 3, down: 1, blank: 'end' as const };
+  const holds: 'one' | 'several' | 'sections' = imposed.sections
+    ? 'sections'
+    : gang.across * gang.down > 1
+      ? 'several'
+      : 'one';
+  const setGang = (patch: Partial<typeof gang>) =>
+    onImposed({ ...imposed, gang: { ...gang, ...patch } });
+  const setSections = (patch: Partial<typeof sections>) =>
+    onImposed({ ...imposed, sections: { ...sections, ...patch } });
   const setInset = (k: keyof typeof inset, v: number) =>
     onImposed({ ...imposed, inset: { ...inset, [k]: Math.max(0, v) } });
 
@@ -136,6 +147,126 @@ export function SourcePanel({
                 />
                 Backs are upside down (made for flipping top ↔ bottom)
               </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(imposed.reversed)}
+                  onChange={(e) => onImposed({ ...imposed, reversed: e.target.checked })}
+                />
+                Printed sheets are in reverse order (last sheet first)
+              </label>
+              <label>
+                Each printed sheet holds
+                <select
+                  value={holds}
+                  onChange={(e) => {
+                    const v = e.target.value as typeof holds;
+                    onImposed({
+                      ...imposed,
+                      gang:
+                        v === 'several'
+                          ? { across: 2, down: 1, order: imposed.gang?.order ?? 'stack' }
+                          : { across: 1, down: 1, order: imposed.gang?.order ?? 'stack' },
+                      sections: v === 'sections' ? { across: 3, down: 1, blank: 'end' } : null,
+                    });
+                  }}
+                >
+                  <option value="one">One sheet</option>
+                  <option value="several">Several sheets side by side, cut apart</option>
+                  <option value="sections">
+                    Equal sections, one page each (blank ones cut off)
+                  </option>
+                </select>
+              </label>
+              {holds !== 'one' && (
+                <div className="row3">
+                  <label>
+                    {holds === 'sections' ? 'Sections across' : 'Across'}
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={holds === 'sections' ? sections.across : gang.across}
+                      onChange={(e) => {
+                        const n = Math.min(12, Math.max(1, Number(e.target.value) || 1));
+                        if (holds === 'sections') setSections({ across: n });
+                        else setGang({ across: n });
+                      }}
+                    />
+                  </label>
+                  <label>
+                    {holds === 'sections' ? 'Sections down' : 'Down'}
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={holds === 'sections' ? sections.down : gang.down}
+                      onChange={(e) => {
+                        const n = Math.min(12, Math.max(1, Number(e.target.value) || 1));
+                        if (holds === 'sections') setSections({ down: n });
+                        else setGang({ down: n });
+                      }}
+                    />
+                  </label>
+                  {holds === 'sections' ? (
+                    <label>
+                      Blank sections
+                      <select
+                        value={sections.blank}
+                        onChange={(e) => setSections({ blank: e.target.value as 'end' | 'start' })}
+                      >
+                        <option value="end">After the pages</option>
+                        <option value="start">Before the pages</option>
+                      </select>
+                    </label>
+                  ) : (
+                    <label>
+                      Cutting gap (mm)
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={imposed.gutter ?? 0}
+                        onChange={(e) =>
+                          onImposed({
+                            ...imposed,
+                            gutter: Math.max(0, Number(e.target.value) || 0),
+                          })
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+              {holds === 'several' && (
+                <label>
+                  Bleed around each (mm)
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={imposed.bleed ?? 0}
+                    onChange={(e) =>
+                      onImposed({ ...imposed, bleed: Math.max(0, Number(e.target.value) || 0) })
+                    }
+                  />
+                  <span className="muted small">
+                    As exported: the parts are twice the bleed plus the cutting gap apart.
+                  </span>
+                </label>
+              )}
+              {holds !== 'one' && (
+                <label>
+                  The parts are
+                  <select
+                    value={gang.order}
+                    onChange={(e) => setGang({ order: e.target.value as 'stack' | 'copies' })}
+                  >
+                    <option value="stack">Cut and stacked (one copy)</option>
+                    <option value="copies">Copies of the same sheet</option>
+                  </select>
+                </label>
+              )}
               <label className="check">
                 <input
                   type="checkbox"

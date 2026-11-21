@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Plan, Recipe } from '../engine';
+import { NO_GANG, type Gang, type Plan, type Recipe } from '../engine';
 import {
   layoutSheets,
+  sectionPageSize,
   MM,
   PAGE_SIZES,
   PRINT_PRESETS,
@@ -100,10 +101,45 @@ export function PrintView({
   const source = pdf?.mode === 'reading' ? pdf : null;
   const pageSize = useMemo(() => {
     const first = source?.info[0];
-    return first ? physicalSize(first, first.trim) : dummySize(settings.dummyPage);
-  }, [source, settings.dummyPage]);
+    if (first) return physicalSize(first, first.trim);
+    // A sheet divided into sections sizes the dummy's pages itself.
+    return sectionPageSize(o, plan.grid) ?? dummySize(settings.dummyPage);
+  }, [source, settings.dummyPage, o, plan.grid]);
   const layout = useMemo(() => layoutSheets(plan, pageSize, o), [plan, pageSize, o]);
-  const sheetCount = plan.sheets.length;
+  const gang = o.gang ?? NO_GANG;
+  const units = layout.gang.units;
+  const sectioned = layout.paper.sectioned;
+  const sections = o.sections ?? { across: 3, down: 1, blank: 'end' as const };
+  const setSections = (patch: Partial<typeof sections>) =>
+    set({ sections: { ...sections, ...patch } });
+  const blankCount = layout.paper.paper.blanks.reduce((n, b) => n + b.w * b.h, 0);
+  const setGang = (patch: Partial<Gang>) => set({ gang: { ...gang, ...patch } });
+  /**
+   * The most units per side that fit (ties: the roomier layout). At actual size they must fit at
+   * 100 %; when fitting to the sheet, shrinking up to 10 % is fine (e.g. two A5 spreads on A4
+   * inside a home printer's margins).
+   */
+  const minFillScale = o.scaling === 'actual' ? 1 : 0.9;
+  const fillSheet = () => {
+    let best = { across: 1, down: 1, scale: -1 };
+    for (let across = 1; across <= 8; across++) {
+      for (let down = 1; down <= 8; down++) {
+        const l = layoutSheets(plan, pageSize, {
+          ...o,
+          scaling: 'fit',
+          gang: { ...gang, across, down },
+        });
+        if (l.scale < minFillScale - 1e-6) continue;
+        const better =
+          across * down > best.across * best.down ||
+          (across * down === best.across * best.down && l.scale > best.scale);
+        if (better) best = { across, down, scale: l.scale };
+      }
+    }
+    setGang({ across: best.across, down: best.down });
+  };
+  // Printed (physical) sheets: fewer than the recipe's sheets when several are ganged on one.
+  const sheetCount = layout.gang.papers;
   const hasBacks = plan.sheets.some((s) => s.back.length > 0);
   const base = source?.name ?? `dummy-${recipe.id}-${plan.pageCount}p`;
 
@@ -204,9 +240,18 @@ export function PrintView({
           <button
             key={k}
             role="radio"
-            aria-checked={JSON.stringify(PRINT_PRESETS[k].options) === JSON.stringify(o)}
+            aria-checked={
+              JSON.stringify(PRINT_PRESETS[k].options) ===
+              JSON.stringify({ ...o, gang: undefined, gutter: undefined })
+            }
             className="preset"
-            onClick={() => onSettings({ ...settings, options: PRINT_PRESETS[k].options })}
+            onClick={() =>
+              // A preset sets how to print; how many go on a sheet stays as chosen.
+              onSettings({
+                ...settings,
+                options: { ...PRINT_PRESETS[k].options, gang: o.gang, gutter: o.gutter },
+              })
+            }
           >
             <strong>{PRINT_PRESETS[k].label}</strong>
             <span className="muted small">{PRINT_PRESETS[k].hint}</span>
@@ -215,7 +260,7 @@ export function PrintView({
       </div>
 
       <div className="print-options">
-        {!source && (
+        {!source && !sectioned && (
           <label>
             Page size (dummy)
             <select
@@ -387,6 +432,134 @@ export function PrintView({
         )}
       </div>
 
+      <fieldset className="gang">
+        <legend>Several per sheet</legend>
+        {o.sheet.kind !== 'fit' && (
+          <label className="check wide">
+            <input
+              type="checkbox"
+              checked={Boolean(o.sections)}
+              onChange={(e) =>
+                set({ sections: e.target.checked ? { across: 3, down: 1, blank: 'end' } : null })
+              }
+            />
+            Divide the sheet into equal sections, one page each (e.g. A4 in thirds for long, narrow
+            pages)
+          </label>
+        )}
+        {sectioned ? (
+          <>
+            <label>
+              Sections across
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={sections.across}
+                onChange={(e) =>
+                  setSections({ across: Math.min(12, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Sections down
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={sections.down}
+                onChange={(e) =>
+                  setSections({ down: Math.min(12, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Blank sections go
+              <select
+                value={sections.blank}
+                onChange={(e) => setSections({ blank: e.target.value as 'end' | 'start' })}
+              >
+                <option value="end">After the pages (right / bottom)</option>
+                <option value="start">Before the pages (left / top)</option>
+              </select>
+            </label>
+          </>
+        ) : (
+          <>
+            <label>
+              Across
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={gang.across}
+                onChange={(e) =>
+                  setGang({ across: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+            <label>
+              Down
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={gang.down}
+                onChange={(e) =>
+                  setGang({ down: Math.min(8, Math.max(1, Number(e.target.value) || 1)) })
+                }
+              />
+            </label>
+          </>
+        )}
+        {units > 1 && (
+          <label>
+            Then
+            <select
+              value={gang.order}
+              onChange={(e) => setGang({ order: e.target.value as Gang['order'] })}
+            >
+              <option value="stack">Cut and stack (one copy)</option>
+              <option value="copies">Copies ({units} per print run)</option>
+            </select>
+          </label>
+        )}
+        {units > 1 && !sectioned && (
+          <label>
+            Cutting gap (mm)
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={o.gutter ?? 0}
+              onChange={(e) => set({ gutter: Math.max(0, Number(e.target.value) || 0) })}
+            />
+          </label>
+        )}
+        {o.sheet.kind !== 'fit' && !sectioned && (
+          <button
+            onClick={fillSheet}
+            title={
+              o.scaling === 'actual'
+                ? 'As many as fit on the sheet at 100 %'
+                : 'As many as fit on the sheet at 90 % or more'
+            }
+          >
+            Fill the sheet
+          </button>
+        )}
+        {sectioned && (
+          <p className="muted small wide">
+            Sections of {mm(layout.width / layout.paper.paper.across)} ×{' '}
+            {mm(layout.height / layout.paper.paper.down)} mm: {units} spread
+            {units === 1 ? '' : 's'} per side
+            {blankCount > 0 &&
+              `, ${blankCount} blank section${blankCount === 1 ? '' : 's'} to cut off`}
+            . Pages run to the cut lines (no bleed); cut guides mark them at the sheet edges.
+          </p>
+        )}
+      </fieldset>
+
       <div className="print-summary">
         <p>
           <strong>{sheetCount}</strong> sheet{sheetCount === 1 ? '' : 's'} of{' '}
@@ -398,6 +571,26 @@ export function PrintView({
           × {mm(pageSize.h)} mm
           {!source && ' · numbered dummy (open a pages PDF to use your artwork)'}
         </p>
+        {units > 1 && (
+          <p>
+            {gang.order === 'stack' ? (
+              <>
+                The {plan.sheets.length} folded sheets are printed <strong>{units} per side</strong>{' '}
+                on {sheetCount} sheet{sheetCount === 1 ? '' : 's'}. After printing, cut the whole
+                stack {o.cropMarks ? 'along the crop marks' : 'where the parts meet'} into {units}{' '}
+                piles. Put the pile from the first position (top left) on top of the next one (left
+                to right, then the next row down), and so on: the sheets are then in order, sheet 1
+                on top.
+                {!o.cropMarks && ' Turning on crop marks shows exactly where to cut.'}
+              </>
+            ) : (
+              <>
+                Each printed sheet carries <strong>{units} copies</strong> of a folded sheet: cut
+                the stack into {units} piles, and each pile makes one complete copy.
+              </>
+            )}
+          </p>
+        )}
         {hasBacks && (
           <p>
             {o.sides === 'duplex' ? (
@@ -438,7 +631,7 @@ export function PrintView({
           <label className="inline">
             Preview sheet
             <select value={sheetShown} onChange={(e) => setPreviewSheet(Number(e.target.value))}>
-              {plan.sheets.map((_, i) => (
+              {Array.from({ length: sheetCount }, (_, i) => (
                 <option key={i} value={i}>
                   {i + 1}
                 </option>

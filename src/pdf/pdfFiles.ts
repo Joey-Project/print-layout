@@ -34,6 +34,8 @@ import type { Plan, Recipe } from '../engine';
 import {
   layoutSheets,
   MM,
+  sectionPageSize,
+  type Segment,
   placePage,
   type PrintOptions,
   type Rect,
@@ -42,11 +44,9 @@ import {
 import {
   physicalSize,
   displayedToBox,
-  imposedArea,
-  panelRegion,
+  proofLayout,
   type ImposedOptions,
   type PdfPageInfo,
-  sideMap,
   slotsByPosition,
 } from './imposed';
 
@@ -241,14 +241,14 @@ async function drawSide(
   src: PDFDocument,
   info: PdfPageInfo[],
   layout: SheetLayout,
-  sheet: number,
+  paper: number,
   side: 'front' | 'back',
   bleed: number,
   extras: { slug: { font: PDFFont; text: string } | null; registration: PDFRef },
 ) {
   const { slug, registration } = extras;
   const page = out.addPage([layout.width, layout.height]);
-  for (const placed of layout.place(sheet, side)) {
+  for (const placed of layout.place(paper, side)) {
     const n = placed.slot.page;
     if (n === null || n > info.length) continue;
     const srcPage = src.getPage(n - 1);
@@ -269,9 +269,9 @@ async function drawSide(
       rotate: degrees(p.rotateCcw),
     });
   }
-  drawMarks(page, layout, registration);
+  drawMarks(page, layout.marks(side), registration);
   if (slug && layout.slugAt) {
-    page.drawText(`${slug.text} · sheet ${sheet + 1} ${side}`, {
+    page.drawText(`${slug.text} · sheet ${paper + 1} of ${layout.gang.papers} ${side}`, {
       x: layout.slugAt.x,
       y: layout.slugAt.y,
       size: 6,
@@ -279,9 +279,9 @@ async function drawSide(
       color: cmyk(0, 0, 0, 1),
     });
   }
-  const t = layout.trim;
+  // An off-centre layout (blank sections) has its boxes where this side's panels are.
+  const { trim: t, bleed: b } = layout.boxes(side);
   page.setTrimBox(t.x, t.y, t.w, t.h);
-  const b = layout.bleed;
   page.setBleedBox(b.x, b.y, b.w, b.h);
   return page;
 }
@@ -305,8 +305,12 @@ function registrationColorSpace(doc: PDFDocument): PDFRef {
 
 const REG_CS = 'CSRegistration';
 
-function drawMarks(page: PDFPage, layout: SheetLayout, registration: PDFRef) {
-  if (!layout.cropMarks.length && !layout.foldMarks.length) return;
+function drawMarks(
+  page: PDFPage,
+  marks: { crop: Segment[]; fold: Segment[] },
+  registration: PDFRef,
+) {
+  if (!marks.crop.length && !marks.fold.length) return;
   const { Resources } = page.node.normalizedEntries();
   let spaces = Resources.lookupMaybe(PDFName.of('ColorSpace'), PDFDict);
   if (!spaces) {
@@ -322,10 +326,10 @@ function drawMarks(page: PDFPage, layout: SheetLayout, registration: PDFRef) {
   ];
   const line = (m: { x1: number; y1: number; x2: number; y2: number }) =>
     ops.push(moveTo(m.x1, m.y1), lineTo(m.x2, m.y2), stroke());
-  layout.cropMarks.forEach(line);
-  if (layout.foldMarks.length) {
+  marks.crop.forEach(line);
+  if (marks.fold.length) {
     ops.push(setDashPattern([2, 2], 0));
-    layout.foldMarks.forEach(line);
+    marks.fold.forEach(line);
   }
   ops.push(popGraphicsState());
   page.pushOperators(...ops);
@@ -341,23 +345,30 @@ export interface ExportInput {
   options: PrintOptions;
   /** File name stem, e.g. the source PDF's name. */
   baseName: string;
-  /** Only this sheet (for a quick preview). */
+  /** Only this printed sheet (for a quick preview). */
   onlySheet?: number;
 }
 
 /** Impose the source onto print-ready sheets. */
 export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const { plan, recipe, options } = input;
+  // A sheet divided into sections sizes the dummy's pages itself.
+  const dummySize = sectionPageSize(options, plan.grid) ?? input.dummyPageSize;
   // The dummy is saved and reloaded so its pages embed like any loaded PDF's.
   const src = await loadPdf(
-    input.source ?? (await (await placeholderPdf(plan.pageCount, input.dummyPageSize)).save()),
+    input.source ?? (await (await placeholderPdf(plan.pageCount, dummySize)).save()),
   );
   flattenForPrint(src);
   const info = pageInfo(src);
-  const pageSize = input.source ? finishedPageSize(info) : input.dummyPageSize;
+  const pageSize = input.source ? finishedPageSize(info) : dummySize;
   const layout = layoutSheets(plan, pageSize, options);
-  const bleed = Math.max(0, options.bleed) * MM;
-  const sheets = input.onlySheet !== undefined ? [input.onlySheet] : plan.sheets.map((_, i) => i);
+  // Sections meet at the cuts: drawing bleed there would spill into the neighbour or the blank.
+  const bleed = layout.paper.sectioned ? 0 : Math.max(0, options.bleed) * MM;
+  // Printed sheets (several recipe sheets each when ganged).
+  const sheets =
+    input.onlySheet !== undefined
+      ? [input.onlySheet]
+      : Array.from({ length: layout.gang.papers }, (_, i) => i);
   const hasBacks = plan.sheets.some((s) => s.back.length > 0);
   const title = `${input.baseName} · ${recipe.name}`;
 
@@ -414,28 +425,21 @@ export async function deimposePdf(
   const src = await loadPdf(imposed);
   flattenForPrint(src);
   const info = pageInfo(src);
-  const sides = sideMap(info.length, options.order);
+  const proof = proofLayout(info, plan, options);
   const out = await PDFDocument.create();
   out.setTitle(`${baseName} (reading order)`);
   out.setCreator('Print Layout');
   const bySlot = slotsByPosition(plan);
   for (let pos = 1; pos <= plan.slotCount; pos++) {
     const at = bySlot.get(pos);
-    const index = at ? sides.pageOf(at.sheet, at.side) : null;
-    if (!at || index === null) {
+    const region = at ? proof.region(at.sheet, at.side, at.slot.col, at.slot.row) : null;
+    if (!at || !region) {
       const prev = out.getPageCount() ? out.getPage(0).getSize() : { width: 420, height: 595 };
       out.addPage([prev.width, prev.height]);
       continue;
     }
+    const index = region.index;
     const pi = info[index]!;
-    const region = panelRegion(
-      imposedArea(pi, options),
-      plan.grid,
-      at.slot.col,
-      at.slot.row,
-      at.side,
-      options,
-    );
     const box = displayedToBox(pi.crop, pi.rotate, region.rect);
     // Keep the physical size: user units are /UserUnit points each.
     const shown = physicalSize(pi, box);
