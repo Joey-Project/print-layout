@@ -1,5 +1,6 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import {
+  fitInPanel,
   layoutSheets,
   MM,
   placedPoint,
@@ -16,7 +17,8 @@ const opts = (preset: keyof typeof PRINT_PRESETS, o: Partial<PrintOptions> = {})
 });
 
 describe('sheet layout', () => {
-  const plan = buildPlan(recipe('saddle-stitch'), 8);
+  const r = recipe('saddle-stitch');
+  const plan = buildPlan(r, 8);
 
   it('fits an A5 booklet on landscape A4 for a home printer, backs unrotated', () => {
     const l = layoutSheets(plan, A5, opts('home'));
@@ -82,6 +84,29 @@ describe('sheet layout', () => {
       expect(p.rotation).toBe((q.rotation + 180) % 360);
       // Mirrored through the sheet centre.
       expect(p.rect.x + p.rect.w / 2 + (q.rect.x + q.rect.w / 2)).toBeCloseTo(l.width, 6);
+    }
+  });
+
+  it.each([
+    ['labels without marks', { slug: true, cropMarks: false, foldMarks: false }],
+    ['marks and labels', { slug: true, cropMarks: true, foldMarks: true }],
+  ] as const)('registers turned backs behind their fronts with %s', (_n, extra) => {
+    for (const sheet of [{ kind: 'fit' } as const, { kind: 'preset', id: 'a4' } as const]) {
+      const l = layoutSheets(plan, A5, opts('shop', { ...extra, sheet, flip: 'long' }));
+      expect(l.backRotated).toBe(true);
+      // Centred, so turning the sheet top ↔ bottom maps the trim onto itself.
+      expect(l.trim.x * 2 + l.trim.w).toBeCloseTo(l.width, 6);
+      expect(l.trim.y * 2 + l.trim.h).toBeCloseTo(l.height, 6);
+      // Each back panel sits exactly behind the front panel it shares paper with. Turning the sheet
+      // top ↔ bottom sends front point (x, y) to back-page point (x, H − y).
+      const front = l.place(0, 'front');
+      for (const b of l.place(0, 'back')) {
+        const frontCol = r.grid.cols - 1 - b.slot.col; // back-view column → front column
+        const f = front.find((x) => x.slot.col === frontCol && x.slot.row === b.slot.row)!;
+        expect(b.rect.x).toBeCloseTo(f.rect.x, 6);
+        expect(b.rect.y).toBeCloseTo(l.height - (f.rect.y + f.rect.h), 6);
+      }
+      if (l.slugAt) expect(l.slugAt.y).toBeGreaterThan(0);
     }
   });
 
@@ -152,5 +177,32 @@ describe('placing a source page into a panel', () => {
     const { tl } = corners(down);
     expect(tl).toEqual([expect.closeTo(50, 9), expect.closeTo(0, 9)]);
     expect(placedPoint(down, trim.x + trim.w + 10, trim.y)[0]).toBeCloseTo(-5, 9);
+  });
+});
+
+describe('fitting a page of another shape into a panel', () => {
+  it('matches the exporter: uniform scale, centred', () => {
+    // A landscape A5 page in a portrait A5 panel: full width, centred vertically.
+    const f = fitInPanel(210, 148, 210 / 148);
+    expect(f.W).toBeCloseTo(210, 9);
+    expect(f.H).toBeCloseTo(210 * (210 / 148), 9);
+    expect(f.x).toBeCloseTo(0, 9);
+    expect(f.y).toBeCloseTo((f.H - 148) / 2, 9);
+    // Same answer as placePage, scaled to the panel.
+    const rect = { x: 0, y: 0, w: f.W, h: f.H };
+    const p = placePage(
+      { rotate: 0, trim: { x: 0, y: 0, w: 210, h: 148 } },
+      rect,
+      0,
+      {
+        top: false,
+        right: false,
+        bottom: false,
+        left: false,
+      },
+      0,
+    );
+    const [, top] = placedPoint(p, 0, 148);
+    expect(f.H - top).toBeCloseTo(f.y, 9); // distance from the panel's top edge
   });
 });

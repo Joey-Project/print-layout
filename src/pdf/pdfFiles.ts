@@ -121,6 +121,12 @@ export interface ExportResult {
   layout: SheetLayout;
 }
 
+/**
+ * Whether a page has a content stream. pdf-lib refuses to embed a page without one (a valid, blank
+ * page), so those are skipped and simply stay blank.
+ */
+const hasContents = (page: PDFPage) => page.node.Contents() !== undefined;
+
 /** Registration colour for marks: prints on every plate. */
 const REGISTRATION = cmyk(1, 1, 1, 1);
 
@@ -139,6 +145,7 @@ async function drawSide(
     const n = placed.slot.page;
     if (n === null || n > info.length) continue;
     const srcPage = src.getPage(n - 1);
+    if (!hasContents(srcPage)) continue; // a truly empty page: nothing to draw
     const p = placePage(
       { rotate: info[n - 1]!.rotate, trim: info[n - 1]!.trim },
       placed.rect,
@@ -301,7 +308,9 @@ export async function deimposePdf(
       { top: false, right: false, bottom: false, left: false },
       0,
     );
-    const embedded = await out.embedPage(src.getPage(index), p.box);
+    const srcPage = src.getPage(index);
+    if (!hasContents(srcPage)) continue; // an empty sheet side reads as a blank page
+    const embedded = await out.embedPage(srcPage, p.box);
     page.drawPage(embedded, {
       x: p.x,
       y: p.y,

@@ -1,7 +1,8 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
 import { DEFAULT_IMPOSED, type ImposedOptions } from '../src/pdf/imposed';
-import { deimposePdf, exportImposed, loadPdf, pageInfo } from '../src/pdf/pdfFiles';
+import { PDFDocument } from 'pdf-lib';
+import { deimposePdf, exportImposed, loadPdf, pageInfo, placeholderPdf } from '../src/pdf/pdfFiles';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
 const A5 = { w: 148 * MM, h: 210 * MM };
@@ -162,5 +163,44 @@ describe('PDF export and de-imposition round trip', () => {
       ['4', '9'],
       ['11', '2'],
     ]);
+  });
+  it('keeps pages that have no content stream as blanks', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    // Page 3 is a valid blank page with no /Contents at all.
+    const dummy = await placeholderPdf(8, A5);
+    const doc = await PDFDocument.create();
+    const copied = await doc.copyPages(dummy, [0, 1, 2, 3, 4, 5, 6, 7]);
+    copied.forEach((p, i) => {
+      if (i === 2) doc.addPage([A5.w, A5.h]);
+      else doc.addPage(p);
+    });
+    expect(doc.getPage(2).node.Contents()).toBeUndefined();
+    const source = await doc.save();
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source,
+      dummyPageSize: A5,
+      options: opts('home'),
+      baseName: 'test',
+    });
+    const sheets = await visibleNumbers(files[0]!.bytes);
+    expect(sheets.flat()).not.toContain('3');
+    expect(sheets.flat()).toContain('4');
+
+    // An imposed PDF with an empty sheet side de-imposes to blank pages there.
+    const bare = await PDFDocument.create();
+    const src = await PDFDocument.load(files[0]!.bytes);
+    const [f0] = await bare.copyPages(src, [0]);
+    bare.addPage(f0!);
+    bare.addPage([f0!.getWidth(), f0!.getHeight()]); // an empty back, no /Contents
+    const back = await deimposePdf(await bare.save(), plan, DEFAULT_IMPOSED, 'test');
+    const reading = await visibleNumbers(back.bytes);
+    // Sheet 1 front holds 8 and 1; its back (2 and 7) is empty.
+    expect(reading[0]).toEqual(['1']);
+    expect(reading[1]).toEqual([]);
+    expect(reading[6]).toEqual([]);
+    expect(reading[7]).toEqual(['8']);
   });
 });

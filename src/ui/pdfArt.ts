@@ -19,7 +19,7 @@ import {
   type ImposedOptions,
   type PdfPageInfo,
 } from '../pdf/imposed';
-import type { Rect } from '../pdf/geometry';
+import { fitInPanel, type Rect } from '../pdf/geometry';
 import type { PdfJsDoc } from '../pdf/render';
 
 export interface LoadedPdf {
@@ -54,19 +54,34 @@ export interface PdfArt {
 /** Longest side of a rendered page: sheets carry several panels, so they get more pixels. */
 const RENDER_PX = { reading: 720, imposed: 1600 };
 
-function crop(src: HTMLCanvasElement, r: Rect, turn: number): HTMLCanvasElement {
+/**
+ * Cut region `r` (displayed fractions) out of a rendered page and turn it `turn` degrees. With
+ * `panelAspect`, the cut-out is first fitted into a panel of that shape (uniformly scaled and
+ * centred on white), as the exporter places a page of a different shape.
+ */
+function crop(
+  src: HTMLCanvasElement,
+  r: Rect,
+  turn: number,
+  panelAspect?: number,
+): HTMLCanvasElement {
   const sx = r.x * src.width;
   const sy = r.y * src.height;
   const sw = Math.max(1, r.w * src.width);
   const sh = Math.max(1, r.h * src.height);
+  const fit = panelAspect ? fitInPanel(sw, sh, panelAspect) : { W: sw, H: sh, x: 0, y: 0 };
   const out = document.createElement('canvas');
   const sideways = turn % 180 !== 0;
-  out.width = Math.round(sideways ? sh : sw);
-  out.height = Math.round(sideways ? sw : sh);
+  out.width = Math.round(sideways ? fit.H : fit.W);
+  out.height = Math.round(sideways ? fit.W : fit.H);
   const ctx = out.getContext('2d')!;
+  if (panelAspect) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, out.width, out.height);
+  }
   ctx.translate(out.width / 2, out.height / 2);
   ctx.rotate((turn * Math.PI) / 180);
-  ctx.drawImage(src, sx, sy, sw, sh, -sw / 2, -sh / 2, sw, sh);
+  ctx.drawImage(src, sx, sy, sw, sh, -fit.W / 2 + fit.x, -fit.H / 2 + fit.y, sw, sh);
   return out;
 }
 
@@ -112,12 +127,12 @@ export function usePdfArt(
   return useMemo(() => {
     if (!pdf || !plan) return null;
     const cache = new Map<string, HTMLCanvasElement>();
-    const cached = (key: string, page: number, r: Rect, turn: number) => {
+    const cached = (key: string, page: number, r: Rect, turn: number, panelAspect?: number) => {
       const hit = cache.get(key);
       if (hit) return hit;
       const src = pages.current.get(page);
       if (!src) return null;
-      const out = crop(src, r, turn);
+      const out = crop(src, r, turn, panelAspect);
       cache.set(key, out);
       return out;
     };
@@ -137,10 +152,12 @@ export function usePdfArt(
       };
       const first = pdf.info[0];
       const size = first ? displayedSize(first.trim, first.rotate) : { w: 1, h: Math.SQRT2 };
+      // Every panel has the first page's shape (as on the exported sheet); other pages are fitted.
+      const panelAspect = size.h / size.w;
       const pageImage = (page: number | null, turn: number) =>
         page === null || page > pdf.info.length
           ? null
-          : cached(`${page}:${turn}`, page - 1, trimOf(page - 1), turn);
+          : cached(`${page}:${turn}`, page - 1, trimOf(page - 1), turn, panelAspect);
       return {
         art: (sheet, side, col, row) => {
           const slot = bySlot.get(`${sheet}:${side}:${col}:${row}`);

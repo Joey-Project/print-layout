@@ -190,9 +190,15 @@ export function layoutSheets(
   const impH = rows * page.h;
   const bleed = Math.max(0, o.bleed) * MM;
   const marks = o.cropMarks || o.foldMarks;
-  // Room needed around the trim, beyond which nothing is drawn.
-  const reserve = Math.max(bleed, marks ? Math.max(MARK_OFFSET, bleed) + MARK_LENGTH : 0);
-  const slugRoom = o.slug && !marks ? SLUG_ROOM : 0;
+  // Room needed around the trim, beyond which nothing is drawn. It is the same on every side, so
+  // the imposition stays centred on the sheet: a back turned top ↔ bottom then lands exactly
+  // behind its front. (A label without marks gets its room on all sides rather than shifting the
+  // imposition, which would misregister the backs.)
+  const reserve = Math.max(
+    bleed,
+    marks ? Math.max(MARK_OFFSET, bleed) + MARK_LENGTH : 0,
+    o.slug && !marks ? bleed + SLUG_ROOM : 0,
+  );
   const warnings: string[] = [];
 
   let width: number;
@@ -201,7 +207,7 @@ export function layoutSheets(
   if (o.sheet.kind === 'fit') {
     scale = 1;
     width = impW + 2 * reserve;
-    height = impH + 2 * reserve + slugRoom;
+    height = impH + 2 * reserve;
   } else {
     let size: { w: number; h: number };
     if (o.sheet.kind === 'custom') size = { w: o.sheet.w * MM, h: o.sheet.h * MM };
@@ -215,7 +221,7 @@ export function layoutSheets(
     const margin = Math.max(0, o.margin) * MM;
     const room = (w: number, h: number) => ({
       w: w - 2 * Math.max(margin, reserve),
-      h: h - 2 * Math.max(margin, reserve) - slugRoom,
+      h: h - 2 * Math.max(margin, reserve),
     });
     const fitScale = (w: number, h: number) => {
       const r = room(w, h);
@@ -249,7 +255,7 @@ export function layoutSheets(
   const th = impH * scale;
   const trim: Rect = {
     x: (width - tw) / 2,
-    y: (height - th) / 2 + slugRoom / 2,
+    y: (height - th) / 2,
     w: tw,
     h: th,
   };
@@ -422,6 +428,16 @@ export function placedPoint(p: Placement, sx: number, sy: number): [number, numb
   const ux = (sx - p.box.left) * p.scale;
   const uy = (sy - p.box.bottom) * p.scale;
   return [p.x + ux * c - uy * s, p.y + ux * s + uy * c];
+}
+
+/**
+ * The smallest panel of shape `aspect` (height / width) that holds a `w` × `h` page, and where the
+ * page sits in it: scaled uniformly and centred, exactly as `placePage` puts pages on a sheet.
+ */
+export function fitInPanel(w: number, h: number, aspect: number) {
+  const W = h / w > aspect ? h / aspect : w;
+  const H = W * aspect;
+  return { W, H, x: (W - w) / 2, y: (H - h) / 2 };
 }
 
 /** Grid helper shared with the imposed-PDF reader. */

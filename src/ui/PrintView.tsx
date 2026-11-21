@@ -409,7 +409,11 @@ export function PrintView({
               <>
                 Print the fronts file. Put the printed stack back in the paper tray so the backs
                 print on the other side{o.reverseBacks ? ' (backs file is in reverse order)' : ''},
-                turning it like a book page, then print the backs file.
+                turning it{' '}
+                {layout.backRotated
+                  ? 'top to bottom (like a wall calendar), as the backs are printed upside down for this'
+                  : 'like a book page (left to right)'}
+                , then print the backs file.
               </>
             )}{' '}
             Test with a few sheets first: printers differ.
