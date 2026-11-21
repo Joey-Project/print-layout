@@ -32,8 +32,9 @@ export function recipeProblems(input: unknown): string[] {
       const where = `folds[${i}]`;
       if (!isObj(f)) return p.push(`${where} must be an object.`);
       if (!oneOf(f.axis, ['x', 'y'])) p.push(`${where}.axis must be "x" or "y".`);
-      if (typeof f.at !== 'number' || !Number.isFinite(f.at))
-        p.push(`${where}.at must be a number.`);
+      if (!Number.isInteger(f.at)) {
+        p.push(`${where}.at must be a whole number (folds run along grid lines between panels).`);
+      }
       if (!oneOf(f.move, ['low', 'high'])) p.push(`${where}.move must be "low" or "high".`);
       if (!oneOf(f.to, ['over', 'under'])) p.push(`${where}.to must be "over" or "under".`);
     });

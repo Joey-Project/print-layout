@@ -9,6 +9,7 @@ import {
   type Recipe,
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
+import { BookView3D } from './BookView3D';
 import { PlanView } from './SheetView';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
@@ -35,6 +36,7 @@ export function App() {
   const [pageCount, setPageCount] = useState(12);
   const [padding, setPadding] = useState<Padding | 'recipe'>('recipe');
   const [hovered, setHovered] = useState<number | null>(null);
+  const [view, setView] = useState<'2d' | '3d'>('2d');
 
   const draft = useMemo(() => parseDraft(text), [text]);
   const active = draft.ok ? draft.recipe : selected;
@@ -192,7 +194,19 @@ export function App() {
                 )}
                 {!draft.ok && <span className="muted"> · showing last valid recipe</span>}
               </p>
-              <PlanView plan={plan} hovered={hovered} onHover={setHovered} />
+              <div className="tabs" role="tablist">
+                <button role="tab" aria-selected={view === '2d'} onClick={() => setView('2d')}>
+                  Sheets (2D)
+                </button>
+                <button role="tab" aria-selected={view === '3d'} onClick={() => setView('3d')}>
+                  Fold &amp; read (3D)
+                </button>
+              </div>
+              {view === '2d' ? (
+                <PlanView plan={plan} hovered={hovered} onHover={setHovered} />
+              ) : (
+                <BookView3D recipe={active} plan={plan} />
+              )}
             </>
           )
         )}

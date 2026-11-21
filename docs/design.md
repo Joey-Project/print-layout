@@ -112,11 +112,16 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
 ## Roadmap
 
 1. **Engine + 2D prototype** — recipe model, fold simulator, plan; built-in recipes; recipe JSON
-   editor with live 2D sheet preview. _(current)_
-2. **PDF in/out** — load PDF (pdf.js thumbnails on the sheets), physical layout (sheet size, margins,
-   gutters, trim/bleed boxes), export via pdf-lib; duplex flip option; blank-page padding.
-3. **3D viewer** — fold/assembly animation that can pause, scrub, reverse; free camera; flip through
-   the finished booklet; explode into spreads.
+   editor with live 2D sheet preview. _(done)_
+2. **3D viewer** — one scrubbable timeline (`src/viewer/timeline.ts`) derived from the same fold
+   simulation: printed sheets → stack → each fold → gather sections → turn leaves. Play forward /
+   backward, pause, step, speed, explode layers, orbit camera; drag a page across the spine to
+   turn it by hand. Printed sheets start in a column, slide up under the sheets above into a stack
+   with visible gaps, then square up. Tests assert the visible page at
+   every page turn matches the 2D plan and is upright. _(done; next: open-book "spreads" layout,
+   paper thickness/creep, PDF page textures)_
+3. **PDF in/out** — load PDF (pdf.js thumbnails on the sheets and 3D faces), physical layout (sheet
+   size, margins, gutters, trim/bleed boxes), export via pdf-lib; duplex flip option.
 4. **Verification** — load an imposed PDF + recipe, reconstruct reading order; optional auto-diff
    against the source PDF.
 5. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
