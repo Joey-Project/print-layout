@@ -275,7 +275,8 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
   const leafCount = leafOrder.length;
 
   let spine: { axis: 'x' | 'y'; at: number; sign: number; edge: BindingEdge } | null = null;
-  if (bound && folds.length > 0) {
+  // Every bound piece has a spine, folded or not (loose leaves bound along one edge have none).
+  if (bound) {
     // Every group folds to the same packet; take its bounds from group 0's final facets.
     const b = packetBounds(finalFacets[0]!);
     const edge: BindingEdge = bound.bindingEdge;
@@ -311,7 +312,7 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
   folds.forEach((f, i) => push('fold', describeFold(f, i, folds.length)));
   let gather: Segment | undefined;
   let gatherSettle: Segment | undefined;
-  if (bound !== null && groups.length > 1 && folds.length > 0) {
+  if (bound !== null && groups.length > 1) {
     gather = push('gather', 'Gather the sections: each slides up under the ones above');
     gatherSettle = push('settle', 'Square up the sections', 0.5);
   }
