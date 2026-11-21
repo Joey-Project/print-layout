@@ -49,6 +49,26 @@ export interface PageTurn {
   grab(time: number, rank: number): number;
 }
 
+/**
+ * Where two panels of the same sheet meet. The paper is continuous there, so the viewer draws a
+ * curved strip joining them whenever they are not lying flat side by side (i.e. at a fold).
+ */
+export interface Seam {
+  /** Panel indices (same sheet). */
+  a: number;
+  b: number;
+  /** The shared edge's endpoints in panel-local (sheet) coordinates, world units. */
+  p0: [number, number];
+  p1: [number, number];
+  /** Unit directions in panel-local coordinates from the edge into panel a / panel b. */
+  inA: [number, number];
+  inB: [number, number];
+  /** True for the binding fold (the spine) of a bound piece. */
+  spine: boolean;
+  /** From this time on the fold has been trimmed off (head/foot bolts), so it is not drawn. */
+  cutAt: number;
+}
+
 export interface Timeline {
   /** Total length in steps. */
   duration: number;
@@ -58,6 +78,7 @@ export interface Timeline {
   pageTurn: PageTurn | null;
   /** One entry per panel; poses are written in the same order. */
   panels: PanelRef[];
+  seams: Seam[];
   /** Time at which the folded piece is complete (start of reading, if any). */
   foldedAt: number;
   /** Number of leaves turned in the reading segment (0 if the recipe is not bound). */
@@ -311,6 +332,50 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     };
   }
 
+  // ---- Seams: every edge shared by two panels of a sheet. In a bound piece, only the spine fold
+  // survives trimming; the other folds are cut open when reading starts. ----
+  const seams: Seam[] = [];
+  const onSpine = (panel: number, axis: 'x' | 'y', line: number) => {
+    if (!spine || spine.axis !== axis) return false;
+    const f = final[panel]!;
+    const folded = axis === 'x' ? f.sx * line + f.tx : f.sy * line + f.ty;
+    return Math.abs(folded - spine.at) < 1e-9;
+  };
+  const addSeam = (a: number, b: number, axis: 'x' | 'y', line: number) => {
+    const isSpine = onSpine(a, axis, line);
+    const { col, row } = panels[a]!;
+    const seam: Seam =
+      axis === 'x'
+        ? {
+            a,
+            b,
+            p0: [line, -row * aspect],
+            p1: [line, -(row + 1) * aspect],
+            inA: [-1, 0],
+            inB: [1, 0],
+            spine: isSpine,
+            cutAt: Infinity,
+          }
+        : {
+            a,
+            b,
+            p0: [col, -line * aspect],
+            p1: [col + 1, -line * aspect],
+            inA: [0, 1],
+            inB: [0, -1],
+            spine: isSpine,
+            cutAt: Infinity,
+          };
+    if (read && !isSpine) seam.cutAt = read.start;
+    seams.push(seam);
+  };
+  panels.forEach((p, i) => {
+    if (p.col + 1 < cols)
+      addSeam(i, panelIndex.get(`${p.sheet}:${p.col + 1}:${p.row}`)!, 'x', p.col + 1);
+    if (p.row + 1 < rows)
+      addSeam(i, panelIndex.get(`${p.sheet}:${p.col}:${p.row + 1}`)!, 'y', p.row + 1);
+  });
+
   const flat = new Matrix4();
   const hinge = new Matrix4();
   const lift = new Matrix4();
@@ -403,6 +468,7 @@ export function buildTimeline(recipe: Recipe, plan: Plan, aspect: number): Timel
     stops: [...stops].sort((a, b) => a - b),
     pageTurn,
     panels,
+    seams,
     foldedAt,
     leafCount: read ? leafCount : 0,
     aspect,

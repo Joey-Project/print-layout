@@ -117,7 +117,9 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    simulation: printed sheets → stack → each fold → gather sections → turn leaves. Play forward /
    backward, pause, step, speed, explode layers, orbit camera; drag a page across the spine to
    turn it by hand. Printed sheets start in a column, slide up under the sheets above into a stack
-   with visible gaps, then square up. Tests assert the visible page at
+   with visible gaps, then square up. Folds are drawn as curved paper joining the two panels, so
+   nested sheets wrap round each other at the spine; head/foot folds are trimmed off when reading
+   starts. Tests assert the visible page at
    every page turn matches the 2D plan and is upright. _(done; next: open-book "spreads" layout,
    paper thickness/creep, PDF page textures)_
 3. **PDF in/out** — load PDF (pdf.js thumbnails on the sheets and 3D faces), physical layout (sheet

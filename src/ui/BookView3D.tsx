@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Plan, Recipe } from '../engine';
-import { faceTexture } from '../viewer/faceTexture';
-import { buildTimeline, type PageTurn, type Timeline } from '../viewer/timeline';
+import { faceTexture, seamTexture } from '../viewer/faceTexture';
+import { seamStrip } from '../viewer/seams';
+import { buildTimeline, type PageTurn, type Seam, type Timeline } from '../viewer/timeline';
 
 const PAGE_SHAPES = [
   { label: 'A-series portrait', aspect: Math.SQRT2 },
@@ -27,10 +28,48 @@ interface Live {
   target: number | null;
 }
 
+/** Segments along a fold's curve. */
+const SEAM_SEGMENTS = 16;
+
+interface SeamMesh {
+  seam: Seam;
+  mesh: THREE.Mesh;
+  positions: THREE.BufferAttribute;
+}
+
 interface SceneState {
   tl: Timeline;
   groups: THREE.Group[];
+  seams: SeamMesh[];
   mats: THREE.Matrix4[];
+}
+
+/** A strip of paper with `SEAM_SEGMENTS` quads, reshaped every frame. */
+function seamMesh(seam: Seam, sheet: number): SeamMesh {
+  const n = SEAM_SEGMENTS;
+  const geometry = new THREE.BufferGeometry();
+  const positions = new THREE.BufferAttribute(new Float32Array((n + 1) * 2 * 3), 3);
+  positions.setUsage(THREE.DynamicDrawUsage);
+  const uv = new Float32Array((n + 1) * 2 * 2);
+  const index: number[] = [];
+  for (let i = 0; i <= n; i++) {
+    uv.set([i / n, 0, i / n, 1], i * 4);
+    if (i < n) index.push(2 * i, 2 * i + 2, 2 * i + 1, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+  }
+  geometry.setAttribute('position', positions);
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geometry.setIndex(index);
+  const length = Math.hypot(seam.p1[0] - seam.p0[0], seam.p1[1] - seam.p0[1]);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshLambertMaterial({
+      map: seamTexture(sheet, length),
+      side: THREE.DoubleSide,
+    }),
+  );
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return { seam, mesh, positions };
 }
 
 function disposeTree(root: THREE.Object3D) {
@@ -132,7 +171,10 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
     };
     /** The leaf rank of the front-most panel under the pointer, if any. */
     const leafUnderPointer = (pt: PageTurn) => {
-      const hit = raycaster.intersectObject(group, true)[0];
+      // Folds (seam strips) are not grabbable; look past them to the first page.
+      const hit = raycaster
+        .intersectObject(group, true)
+        .find((h) => h.object.parent?.userData.panel !== undefined);
       if (!hit) return null;
       const panel = hit.object.parent?.userData.panel as number | undefined;
       return (panel === undefined ? undefined : pt.rankOf(panel)) ?? null;
@@ -240,6 +282,21 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
         }
         s.tl.poseAt(t, L.explode, s.mats);
         s.groups.forEach((g, i) => g.matrix.copy(s.mats[i]!));
+        for (const sm of s.seams) {
+          const arr = sm.positions.array as Float32Array;
+          const gap = seamStrip(
+            sm.seam,
+            s.mats[sm.seam.a]!,
+            s.mats[sm.seam.b]!,
+            SEAM_SEGMENTS,
+            arr,
+          );
+          sm.mesh.visible = t < sm.seam.cutAt && gap > 1e-6;
+          if (!sm.mesh.visible) continue;
+          sm.positions.needsUpdate = true;
+          sm.mesh.geometry.computeVertexNormals();
+          sm.mesh.geometry.computeBoundingBox();
+        }
         group.updateMatrixWorld(true);
 
         if ((L.autoFrame || L.snap) && !drag) {
@@ -310,7 +367,9 @@ export function BookView3D({ recipe, plan }: { recipe: Recipe; plan: Plan }) {
       group.add(g);
       return g;
     });
-    scene.current = { tl, groups, mats: tl.panels.map(() => new THREE.Matrix4()) };
+    const seams = tl.seams.map((seam) => seamMesh(seam, tl.panels[seam.a]!.sheet));
+    for (const sm of seams) group.add(sm.mesh);
+    scene.current = { tl, groups, seams, mats: tl.panels.map(() => new THREE.Matrix4()) };
     const t = Math.min(live.current.time, tl.duration);
     live.current.time = t;
     live.current.target = null;

@@ -57,3 +57,26 @@ export function faceTexture(
   tex.anisotropy = 4;
   return tex;
 }
+
+/**
+ * Paper for a fold strip: plain paper with the sheet's coloured frame continuing across the fold at
+ * both ends, so the frames of the two joined pages read as one sheet. `length` is the fold's length
+ * in panel widths (the frame is drawn at the same thickness as on the pages).
+ */
+export function seamTexture(sheet: number, length: number): CanvasTexture {
+  // Pages are 256 px per panel width with a 10 px frame.
+  const h = Math.round(256 * length);
+  const band = 10;
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#fffdf8';
+  ctx.fillRect(0, 0, 4, h);
+  ctx.fillStyle = `hsl(${sheetHue(sheet)} 55% 55%)`;
+  ctx.fillRect(0, 0, 4, band);
+  ctx.fillRect(0, h - band, 4, band);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
+}

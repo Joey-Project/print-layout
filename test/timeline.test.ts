@@ -1,5 +1,6 @@
 import { Matrix4, Vector3 } from 'three';
 import { buildPlan, builtinRecipes, type Plan, type Recipe } from '../src/engine';
+import { seamStrip } from '../src/viewer/seams';
 import { buildTimeline } from '../src/viewer/timeline';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
@@ -143,6 +144,57 @@ describe('3D timeline agrees with the 2D plan', () => {
     // Catching leaf 3 itself keeps it where it is; grabbing leaf 2 sends leaf 3 back to the right.
     expect(turn.grab(settling, 3)).toBe(settling);
     expect(turn.grab(settling, 2)).toBe(turn.start + 3);
+  });
+
+  it('joins the two halves of each sheet round the spine, outer sheets wrapping inner ones', () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 12);
+    const tl = buildTimeline(r, plan, ASPECT);
+    const turn = tl.pageTurn!;
+    expect(tl.seams).toHaveLength(3);
+    expect(tl.seams.every((s) => s.spine && s.cutAt === Infinity)).toBe(true);
+    const mats = tl.panels.map(() => new Matrix4());
+    const out = new Float32Array(17 * 6);
+    const strip = (t: number, sheet: number) => {
+      tl.poseAt(t, 10, mats);
+      const seam = tl.seams.find((s) => tl.panels[s.a]!.sheet === sheet)!;
+      const gap = seamStrip(seam, mats[seam.a]!, mats[seam.b]!, 16, out);
+      const xs = Array.from({ length: 34 }, (_, i) => out[i * 3]!);
+      const end = (panel: number) =>
+        new Vector3(seam.p0[0], seam.p0[1], 0).applyMatrix4(mats[panel]!);
+      return { gap, minX: Math.min(...xs), maxX: Math.max(...xs), seam, end };
+    };
+
+    // Closed: each sheet folds round the spine (x = 1), the outer sheet furthest out.
+    const closed = [0, 1, 2].map((sheet) => {
+      const c = strip(turn.start, sheet);
+      expect(c.maxX).toBeLessThanOrEqual(1 + 1e-6);
+      // The strip starts and ends exactly on its two pages' spine edges.
+      const a = c.end(c.seam.a);
+      const b = c.end(c.seam.b);
+      expect([out[0], out[1], out[2]]).toEqual([a.x, a.y, a.z].map((v) => expect.closeTo(v, 5)));
+      expect([out[96], out[97], out[98]]).toEqual([b.x, b.y, b.z].map((v) => expect.closeTo(v, 5)));
+      return c;
+    });
+    expect(closed[0]!.minX).toBeLessThan(closed[1]!.minX);
+    expect(closed[1]!.minX).toBeLessThan(closed[2]!.minX);
+
+    // Opened at the centre spread (pages 6 | 7): the middle sheet lies flat, outer ones too.
+    const centre = turn.start + 3;
+    expect(strip(centre, 2).gap).toBeLessThan(1e-9);
+    expect(strip(centre, 0).gap).toBeLessThan(1e-9);
+  });
+
+  it('trims the head folds of a signature when reading starts, keeping the spine', () => {
+    const r = recipe('signature-8');
+    const tl = buildTimeline(r, buildPlan(r, 8), ASPECT);
+    const read = tl.segments.find((s) => s.kind === 'read')!;
+    const spine = tl.seams.filter((s) => s.spine);
+    const bolts = tl.seams.filter((s) => !s.spine);
+    expect(spine.length).toBeGreaterThan(0);
+    expect(bolts.length).toBeGreaterThan(0);
+    expect(spine.every((s) => s.cutAt === Infinity)).toBe(true);
+    expect(bolts.every((s) => s.cutAt === read.start)).toBe(true);
   });
 
   it('builds fold-only timelines for sequence recipes', () => {
