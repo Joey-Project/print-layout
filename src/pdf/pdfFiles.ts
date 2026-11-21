@@ -353,7 +353,7 @@ export interface ExportInput {
 export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const { plan, recipe, options } = input;
   // A sheet divided into sections sizes the dummy's pages itself.
-  const dummySize = sectionPageSize(options) ?? input.dummyPageSize;
+  const dummySize = sectionPageSize(options, plan.grid) ?? input.dummyPageSize;
   // The dummy is saved and reloaded so its pages embed like any loaded PDF's.
   const src = await loadPdf(
     input.source ?? (await (await placeholderPdf(plan.pageCount, dummySize)).save()),
@@ -362,7 +362,8 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
   const info = pageInfo(src);
   const pageSize = input.source ? finishedPageSize(info) : dummySize;
   const layout = layoutSheets(plan, pageSize, options);
-  const bleed = Math.max(0, options.bleed) * MM;
+  // Sections meet at the cuts: drawing bleed there would spill into the neighbour or the blank.
+  const bleed = layout.paper.sectioned ? 0 : Math.max(0, options.bleed) * MM;
   // Printed sheets (several recipe sheets each when ganged).
   const sheets =
     input.onlySheet !== undefined

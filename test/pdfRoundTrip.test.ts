@@ -388,6 +388,38 @@ describe('PDF export and de-imposition round trip', () => {
     ]);
     expect(layout.scale).toBeCloseTo(1, 9); // the dummy is sized to the sections
   });
+  it('draws no bleed on a sheet in sections, even with bleed set', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 8);
+    const options = opts('home', {
+      sheet: { kind: 'preset', id: 'a4' },
+      sections: { across: 3, down: 1, blank: 'end' },
+      bleed: 3,
+    });
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options,
+      baseName: 'test',
+    });
+    const doc = await loadPdf(files[0]!.bytes);
+    const widths = doc.getPages().flatMap((page) => {
+      const xobjects = page.node.Resources()!.lookup(PDFName.of('XObject'), PDFDict);
+      return xobjects.values().map((ref) => {
+        const bbox = (doc.context.lookup(ref) as PDFRawStream).dict.lookup(
+          PDFName.of('BBox'),
+          PDFArray,
+        );
+        const n = (i: number) => bbox.lookup(i, PDFNumber).asNumber();
+        return (n(2) - n(0)) / MM;
+      });
+    });
+    expect(widths).toHaveLength(8);
+    // Each page is clipped to its 99 mm section: nothing spills over the cuts.
+    for (const w of widths) expect(w).toBeCloseTo(99, 3);
+  });
   it.each([
     ['two per sheet, cut and stack', { gang: { across: 2, down: 1, order: 'stack' } }, {}],
     [

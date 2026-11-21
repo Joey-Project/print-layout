@@ -132,7 +132,7 @@ export function App() {
   // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
   const printGang = print.options.gang ?? NO_GANG;
   // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
-  const section = sectionPageSize(print.options);
+  const section = plan ? sectionPageSize(print.options, plan.grid) : null;
   const sectionAspect = section ? section.h / section.w : null;
   const printSections =
     print.options.sheet.kind === 'fit' ? null : (print.options.sections ?? null);

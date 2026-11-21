@@ -103,8 +103,8 @@ export function PrintView({
     const first = source?.info[0];
     if (first) return physicalSize(first, first.trim);
     // A sheet divided into sections sizes the dummy's pages itself.
-    return sectionPageSize(o) ?? dummySize(settings.dummyPage);
-  }, [source, settings.dummyPage, o]);
+    return sectionPageSize(o, plan.grid) ?? dummySize(settings.dummyPage);
+  }, [source, settings.dummyPage, o, plan.grid]);
   const layout = useMemo(() => layoutSheets(plan, pageSize, o), [plan, pageSize, o]);
   const gang = o.gang ?? NO_GANG;
   const units = layout.gang.units;

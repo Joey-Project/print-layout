@@ -266,35 +266,44 @@ export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions):
       const index = sides.pageOf(printedSheet, side);
       if (index === null) return null;
       const page = info[index]!;
-      // The part's rectangle on the front (displayed fractions).
+      // The imposed area on this page (sections run to the page's edges), and the part's rectangle
+      // in it as seen from this side (displayed fractions).
+      const area: Rect = paper.sectioned ? { x: 0, y: 0, w: 1, h: 1 } : imposedArea(page, o);
+      // A back is the front turned over left ↔ right, so its parts run in mirrored columns.
+      const ucol = side === 'back' ? across - 1 - at.col : at.col;
       let unit: Rect;
       if (paper.sectioned) {
         const p = paper.paper;
         const cell = p.unitCell(at.col, at.row);
+        const x = cell.col / p.across;
+        const w = cols / p.across;
         unit = {
-          x: cell.col / p.across,
+          x: side === 'back' ? 1 - x - w : x,
           y: cell.row / p.down,
-          w: cols / p.across,
+          w,
           h: rows / p.down,
         };
       } else {
-        const area = imposedArea(page, o);
         const size = physicalSize(page, page.crop);
         const gx = ((o.gutter ?? 0) * MM) / size.w;
         const gy = ((o.gutter ?? 0) * MM) / size.h;
         const uw = (area.w - (across - 1) * gx) / across;
         const uh = (area.h - (down - 1) * gy) / down;
-        unit = { x: area.x + at.col * (uw + gx), y: area.y + at.row * (uh + gy), w: uw, h: uh };
+        unit = { x: area.x + ucol * (uw + gx), y: area.y + at.row * (uh + gy), w: uw, h: uh };
       }
-      // Its back is behind it: mirrored about the page's centre (turned left ↔ right).
-      if (side === 'back') unit = { ...unit, x: 1 - unit.x - unit.w };
       const pw = unit.w / cols;
       const ph = unit.h / rows;
       const rect = { x: unit.x + col * pw, y: unit.y + row * ph, w: pw, h: ph };
       if (side === 'back' && o.backRotated) {
+        // Printed upside down: turned 180° within the imposed area.
         return {
           index,
-          rect: { x: 1 - rect.x - rect.w, y: 1 - rect.y - rect.h, w: rect.w, h: rect.h },
+          rect: {
+            x: 2 * area.x + area.w - rect.x - rect.w,
+            y: 2 * area.y + area.h - rect.y - rect.h,
+            w: rect.w,
+            h: rect.h,
+          },
           turn: 180,
         };
       }

@@ -452,11 +452,18 @@ function sideMarks(
 
 const CUT_GUIDE = 4 * MM;
 
-/** Page (section) size for a sheet divided into sections, or null when it is not. */
-export function sectionPageSize(o: PrintOptions): { w: number; h: number } | null {
+/**
+ * Page (section) size for a sheet divided into sections, or null when it is not. The section grid
+ * is the one the layout uses: grown, when needed, to fit one spread of `grid`.
+ */
+export function sectionPageSize(
+  o: PrintOptions,
+  grid: { cols: number; rows: number },
+): { w: number; h: number } | null {
   if (o.sheet.kind === 'fit' || !o.sections) return null;
-  const { width, height } = sheetSize(o, o.sections);
-  return { w: width / Math.max(1, o.sections.across), h: height / Math.max(1, o.sections.down) };
+  const { across, down } = paperPlan(1, grid, NO_GANG, o.sections).paper;
+  const { width, height } = sheetSize(o, { ...o.sections, across, down });
+  return { w: width / across, h: height / down };
 }
 
 /** Sheet size and orientation for a sectioned sheet: 'auto' turns it so sections are longest. */
