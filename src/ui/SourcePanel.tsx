@@ -1,7 +1,11 @@
 import { useRef, useState } from 'react';
-import { MM } from '../pdf/geometry';
+import { MM, PAGE_SIZES } from '../pdf/geometry';
+import { DEFAULT_IMAGE_PAGES, type ImagePageOptions } from '../pdf/images';
 import { inPdfOrder, physicalSize, sheetPermutation, type ImposedOptions } from '../pdf/imposed';
 import type { LoadedPdf, PdfArt } from './pdfArt';
+
+/** Images the pages can be made from: anything the browser reads (PNG and JPEG kept as they are). */
+const IMAGE_ACCEPT = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.avif,.bmp,.svg';
 
 /** Open a PDF from disk: page info via pdf-lib, rendering via pdf.js (both loaded on demand). */
 export async function openPdfFile(file: File, mode: LoadedPdf['mode']): Promise<LoadedPdf> {
@@ -22,6 +26,7 @@ export function SourcePanel({
   art,
   imposed,
   onOpen,
+  onReplace,
   onClose,
   onImposed,
   sheetPositions,
@@ -33,10 +38,13 @@ export function SourcePanel({
   /** Positions the sheet order picks from (every part on the printed sheets, empty ones too). */
   sheetPositions: number;
   onOpen: (pdf: LoadedPdf) => void;
+  /** The same images rebuilt with other page options (keeps the page order). */
+  onReplace: (pdf: LoadedPdf) => void;
   onClose: () => void;
   onImposed: (o: ImposedOptions) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   // Which button opened the file picker (a ref: the file arrives before any re-render).
   const mode = useRef<LoadedPdf['mode']>('reading');
   const [busy, setBusy] = useState(false);
@@ -46,16 +54,46 @@ export function SourcePanel({
     mode.current = m;
     input.current?.click();
   };
-  const load = async (file: File) => {
+  /**
+   * Bumps whenever a newer open or rebuild starts, or the source is closed: a task that finishes
+   * after that is stale, and its result is dropped instead of bringing the source back.
+   */
+  const generation = useRef(0);
+  const run = async (task: () => Promise<LoadedPdf>, use: (pdf: LoadedPdf) => void) => {
+    const gen = ++generation.current;
+    const stale = () => gen !== generation.current;
     setBusy(true);
     setError(null);
     try {
-      onOpen(await openPdfFile(file, mode.current));
+      const loaded = await task();
+      if (stale()) void loaded.js.loadingTask.destroy();
+      else use(loaded);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!stale()) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (!stale()) setBusy(false);
     }
+  };
+  const load = (file: File) => run(() => openPdfFile(file, mode.current), onOpen);
+  const loadImages = (files: File[]) =>
+    run(async () => {
+      const { openImageFiles } = await import('./imageFiles');
+      return openImageFiles(files, pdf?.images?.options ?? DEFAULT_IMAGE_PAGES);
+    }, onOpen);
+  const rebuild = (options: ImagePageOptions) => {
+    const images = pdf?.images;
+    if (!images) return;
+    void run(async () => {
+      const { imagesPdf } = await import('./imageFiles');
+      return imagesPdf(images.list, options);
+    }, onReplace);
+  };
+  const close = () => {
+    // Whatever is still opening or rebuilding is for the source being closed.
+    generation.current++;
+    setBusy(false);
+    setError(null);
+    onClose();
   };
 
   const first = pdf?.info[0];
@@ -93,14 +131,31 @@ export function SourcePanel({
           if (f) void load(f);
         }}
       />
+      <input
+        ref={imageInput}
+        type="file"
+        accept={IMAGE_ACCEPT}
+        multiple
+        hidden
+        aria-label="Image files"
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length) void loadImages(files);
+        }}
+      />
       {!pdf ? (
         <>
           <p className="muted small">
-            Open a PDF to see its pages on the sheets and in 3D. It stays on your computer.
+            Open a PDF or images to see the pages on the sheets and in 3D. They stay on your
+            computer.
           </p>
           <div className="buttons">
             <button disabled={busy} onClick={() => pick('reading')}>
               Open pages PDF…
+            </button>
+            <button disabled={busy} onClick={() => imageInput.current?.click()}>
+              Open images…
             </button>
             <button disabled={busy} onClick={() => pick('imposed')}>
               Proof an imposed PDF…
@@ -108,17 +163,19 @@ export function SourcePanel({
           </div>
           <p className="muted small">
             <strong>Pages PDF</strong>: one page per finished page, in reading order (as exported
-            from InDesign). <strong>Imposed PDF</strong>: print-ready sheets to check against the
-            recipe.
+            from InDesign). <strong>Images</strong>: one page per image, in file-name order.{' '}
+            <strong>Imposed PDF</strong>: print-ready sheets to check against the recipe.
           </p>
+          {busy && <p className="muted small">Opening…</p>}
         </>
       ) : (
         <>
           <p className="file">
-            <strong title={pdf.name}>{pdf.name}.pdf</strong>
+            <strong title={pdf.name}>{pdf.images ? pdf.name : `${pdf.name}.pdf`}</strong>
             <span className="muted">
               {' '}
-              · {pdf.info.length} page{pdf.info.length === 1 ? '' : 's'}
+              · {pdf.info.length} {pdf.images ? 'image' : 'page'}
+              {pdf.info.length === 1 ? '' : 's'}
               {size && ` · ${mm(size.w)} × ${mm(size.h)} mm`}
               {pdf.mode === 'imposed' ? ' · imposed sheets' : ''}
             </span>
@@ -127,6 +184,9 @@ export function SourcePanel({
             <p className="muted small">
               Rendering pages… {art.rendered} / {art.total}
             </p>
+          )}
+          {pdf.images && (
+            <ImagePagesFields options={pdf.images.options} busy={busy} onChange={rebuild} />
           )}
           {pdf.mode === 'imposed' && (
             <div className="imposed-options">
@@ -307,7 +367,7 @@ export function SourcePanel({
             </div>
           )}
           <div className="buttons">
-            <button onClick={onClose}>Close PDF</button>
+            <button onClick={close}>{pdf.images ? 'Close images' : 'Close PDF'}</button>
           </div>
         </>
       )}
@@ -361,6 +421,89 @@ function SheetOrderField({
       <p id="sheet-order-hint" className="muted small">
         Drag the sheets on the Sheets tab, or type them numbered in the PDF&apos;s own order: “3, 1,
         2” reads its third sheet first.
+      </p>
+    </div>
+  );
+}
+
+/** Page size and placement for pages made from images: one size for every page. */
+function ImagePagesFields({
+  options,
+  busy,
+  onChange,
+}: {
+  options: ImagePageOptions;
+  busy: boolean;
+  onChange: (o: ImagePageOptions) => void;
+}) {
+  const { size, fit } = options;
+  return (
+    <div className="image-options">
+      <div className="row">
+        <label>
+          Page size
+          <select
+            value={size.kind === 'image' ? 'image' : size.id}
+            disabled={busy}
+            onChange={(e) => {
+              const id = e.target.value;
+              onChange({
+                ...options,
+                size:
+                  id === 'image'
+                    ? { kind: 'image' }
+                    : {
+                        kind: 'preset',
+                        id,
+                        orientation: size.kind === 'preset' ? size.orientation : 'portrait',
+                      },
+              });
+            }}
+          >
+            <option value="image">Like the first image</option>
+            {PAGE_SIZES.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label} ({p.w} × {p.h} mm)
+              </option>
+            ))}
+          </select>
+        </label>
+        {size.kind === 'preset' && (
+          <label>
+            Orientation
+            <select
+              value={size.orientation}
+              disabled={busy}
+              onChange={(e) =>
+                onChange({
+                  ...options,
+                  size: { ...size, orientation: e.target.value as 'portrait' | 'landscape' },
+                })
+              }
+            >
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </label>
+        )}
+      </div>
+      <label>
+        Each image
+        <select
+          value={fit}
+          disabled={busy}
+          onChange={(e) => onChange({ ...options, fit: e.target.value as ImagePageOptions['fit'] })}
+        >
+          <option value="fit">Fits the page (whole image, white margins)</option>
+          <option value="fill">Fills the page (cropped to cover)</option>
+        </select>
+      </label>
+      <p className="muted small">
+        {size.kind === 'image'
+          ? 'Every page has the first image’s shape, its long side 210 mm. '
+          : ''}
+        Images keep their full resolution. Insert blank pages in the Page order on the Sheets tab.
+        {busy && ' Rebuilding the pages…'}
       </p>
     </div>
   );

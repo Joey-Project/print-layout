@@ -42,6 +42,7 @@ import {
 import { PlanView, type SheetOrderControls } from './SheetView';
 import { PageOrderStrip } from './PageOrderStrip';
 import { FoldEditor, newRecipe } from './FoldEditor';
+import { bookLength, type PageEntry } from '../pdf/pageOrder';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
 
@@ -89,8 +90,11 @@ export function App() {
   const [view, setView] = useState<'2d' | '3d' | 'print'>('2d');
   const [pdf, setPdf] = useState<LoadedPdf | null>(null);
   const [imposed, setImposed] = useState<ImposedOptions>(DEFAULT_IMPOSED);
-  /** A reading-order PDF's pages in another order: book page i + 1 is PDF page `pageOrder[i]`. */
-  const [pageOrder, setPageOrder] = useState<number[] | undefined>(undefined);
+  /**
+   * A reading-order PDF's pages in another order: book page i + 1 is PDF page `pageOrder[i]`, or a
+   * blank page for `null` (see `pageSource`).
+   */
+  const [pageOrder, setPageOrder] = useState<PageEntry[] | undefined>(undefined);
   const [print, setPrint] = useState<PrintSettings>(DEFAULT_PRINT);
   const viewerDebug = useRef<ViewerDebug | null>(null);
   const [restore, setRestore] = useState<ViewerState | null>(null);
@@ -120,13 +124,13 @@ export function App() {
   const proofPagesMin = proofRange
     ? Math.max(1, (proofRange.min - 1) * pagesPerSheet(active) + 1)
     : 1;
-  // A loaded PDF decides the page count: its pages, or (imposed) its sheets × pages per sheet,
-  // fewer when the last printed sheets have empty positions.
+  // A loaded PDF decides the page count: its pages plus the blanks inserted in the page order, or
+  // (imposed) its sheets × pages per sheet, fewer when the last printed sheets have empty positions.
   const effectivePages = useMemo(() => {
     if (!pdf) return pageCount;
-    if (pdf.mode === 'reading') return pdf.info.length;
+    if (pdf.mode === 'reading') return bookLength(pageOrder, pdf.info.length);
     return Math.max(proofPagesMin, Math.min(proofPagesMax, imposed.pages ?? proofPagesMax));
-  }, [pdf, pageCount, imposed.pages, proofPagesMin, proofPagesMax]);
+  }, [pdf, pageCount, pageOrder, imposed.pages, proofPagesMin, proofPagesMax]);
 
   const planResult = useMemo((): { plan: Plan } | { error: string } => {
     try {
@@ -305,7 +309,18 @@ export function App() {
       derived: {
         recipeProblems: draft.ok ? [] : draft.problems,
         // The PDF itself is not included; load the same file to reproduce.
-        pdf: pdf ? rounded({ name: pdf.name, mode: pdf.mode, pages: pdf.info }) : null,
+        // Built from images: their names and how they were placed (not the pixels).
+        pdf: pdf
+          ? rounded({
+              name: pdf.name,
+              mode: pdf.mode,
+              pages: pdf.info,
+              images: pdf.images
+                ? { files: pdf.images.list.map((i) => i.name), options: pdf.images.options }
+                : undefined,
+            })
+          : null,
+        bookPages: pdf?.mode === 'reading' ? effectivePages : undefined,
         plan: plan
           ? rounded({
               pageCount: plan.pageCount,
@@ -449,7 +464,11 @@ export function App() {
 
         <div className="row">
           <label>
-            {pdf?.mode === 'imposed' ? 'Pages in the book' : 'Pages in source PDF'}
+            {pdf?.mode === 'imposed'
+              ? 'Pages in the book'
+              : pdf
+                ? 'Pages in the book (with blanks)'
+                : 'Pages in source PDF'}
             <input
               type="number"
               min={pdf?.mode === 'imposed' ? proofPagesMin : 1}
@@ -458,7 +477,7 @@ export function App() {
               disabled={pdf?.mode === 'reading'}
               title={
                 pdf?.mode === 'reading'
-                  ? 'Set by the loaded PDF'
+                  ? 'Set by the loaded pages and the blank pages inserted in the page order'
                   : pdf
                     ? `${proofPagesMin}–${proofPagesMax}: fewer when the last printed sheets have empty positions`
                     : undefined
@@ -488,7 +507,12 @@ export function App() {
           imposed={imposed}
           sheetPositions={proof?.positions ?? 0}
           onOpen={(p) => {
-            logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
+            logEvent('openPdf', {
+              name: p.name,
+              mode: p.mode,
+              pages: p.info.length,
+              images: p.images?.list.length,
+            });
             setPdf(p);
             // A new PDF starts in its own page order.
             setPageOrder(undefined);
@@ -496,6 +520,12 @@ export function App() {
             if (imposed.pages !== undefined || imposed.sheetOrder !== undefined)
               setImposed({ ...imposed, pages: undefined, sheetOrder: undefined });
             setView(p.mode === 'imposed' ? '2d' : view);
+          }}
+          onReplace={(p) => {
+            // The same images, rebuilt in another page size or fit: the page order still holds.
+            logEvent('rebuildImages', { name: p.name, ...p.images?.options });
+            void pdf?.js.loadingTask.destroy();
+            setPdf(p);
           }}
           onClose={() => {
             logEvent('closePdf');

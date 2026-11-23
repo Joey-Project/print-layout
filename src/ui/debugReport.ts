@@ -5,6 +5,7 @@
  */
 import type { Padding, Recipe } from '../engine';
 import type { ImposedOptions } from '../pdf/imposed';
+import type { PageEntry } from '../pdf/pageOrder';
 import type { PrintSettings } from './PrintView';
 
 export const REPORT_KIND = 'print-layout/debug-report';
@@ -62,8 +63,11 @@ export interface DebugReport {
     print?: PrintSettings;
     /** How an imposed PDF is read (absent in older reports). */
     imposed?: ImposedOptions;
-    /** A reading-order PDF's pages in another order (absent in older reports and when unmoved). */
-    pageOrder?: number[];
+    /**
+     * A reading-order PDF's pages in another order, `null` for an inserted blank page (absent in
+     * older reports and when unmoved).
+     */
+    pageOrder?: PageEntry[];
   };
   viewer: ViewerState | null;
   derived: Record<string, unknown>;

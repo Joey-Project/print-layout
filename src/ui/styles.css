@@ -496,7 +496,8 @@ main {
   gap: 6px;
   font-weight: 400;
 }
-.imposed-options {
+.imposed-options,
+.image-options {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -822,4 +823,21 @@ label.inline {
 }
 .import-note p {
   margin: 6px 0;
+}
+
+/* A blank page inserted in the page order: plain paper, dashed so it reads as added. */
+.page-order-pages .art.blank-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 10px;
+}
+.page-order-tools .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 4px;
 }
