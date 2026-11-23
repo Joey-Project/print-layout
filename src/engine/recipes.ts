@@ -13,7 +13,8 @@ export function concertinaFolds(panels: number): FoldStep[] {
 export function accordion(panels: number): Recipe {
   return {
     id: `accordion-${panels}`,
-    name: `Accordion (${panels} panels)`,
+    // The panel count is set beside the recipe (and told in the description), not in the name.
+    name: 'Accordion',
     description:
       `One strip of ${panels} panels folded back and forth. Reads across the front, ` +
       'then across the back after turning the whole strip over.',
@@ -21,6 +22,22 @@ export function accordion(panels: number): Recipe {
     folds: concertinaFolds(panels),
     reading: { mode: 'sequence' },
   };
+}
+
+/**
+ * Whether `r` is a plain accordion of any length: one row of panels folded back and forth, read
+ * across the front and then across the back (so its panel count can simply be changed).
+ */
+export function isAccordion(r: Recipe): boolean {
+  if (r.reading.mode !== 'sequence' || r.reading.order || r.grid.rows !== 1) return false;
+  const folds = concertinaFolds(r.grid.cols);
+  return (
+    r.folds.length === folds.length &&
+    r.folds.every((f, i) => {
+      const g = folds[i]!;
+      return f.axis === g.axis && f.at === g.at && f.move === g.move && f.to === g.to;
+    })
+  );
 }
 
 const f = (col: number, row: number, rotation: 0 | 180 = 0): PanelFace => ({
@@ -58,7 +75,6 @@ export const builtinRecipes: Recipe[] = [
     padding: 'beforeLastPage',
   },
   accordion(4),
-  accordion(6),
   {
     id: 'tri-fold-roll',
     name: 'Tri-fold (roll / letter fold)',

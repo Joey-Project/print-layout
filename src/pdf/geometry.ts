@@ -7,10 +7,13 @@
 import {
   NO_GANG,
   paperPlan,
+  pieceName,
+  splitStrip,
   type Gang,
   type GangPlan,
   type Grid,
   type PaperPlan,
+  type Piece,
   type Plan,
   type Rotation,
   type Sections,
@@ -91,6 +94,25 @@ export interface PrintOptions {
    * across/down; its order still applies.
    */
   sections?: Sections | null;
+  /**
+   * Print a long strip (e.g. an accordion) in pieces of `panels` panels, glued end to end: each
+   * piece but a strip's last has a glue tab of `tab` mm past its last panel, which goes under the
+   * next piece's first panel. Pieces are laid out like sheets (several per sheet with `gang`).
+   * Replaces `sections`.
+   */
+  join?: Join | null;
+}
+
+export interface Join {
+  panels: number;
+  /** Glue tab width, mm (0: the pieces butt together, to be taped). */
+  tab: number;
+}
+
+/** The join that applies: only to a strip of several columns, cut into more than one piece. */
+export function activeJoin(o: PrintOptions, grid: Grid): Join | null {
+  const j = o.join;
+  return j && grid.cols > 1 && Math.floor(j.panels) < grid.cols ? j : null;
 }
 
 export type PrintPreset = 'home' | 'manual' | 'shop';
@@ -195,6 +217,16 @@ export interface SheetLayout {
   units: Rect[][];
   /** Blank sections on the front, cut off after printing. */
   blanks: Rect[];
+  /** Printing a strip in pieces: the pieces (indexed like `gang`'s sheets), else null. */
+  pieces: Piece[] | null;
+  /**
+   * Glue tabs (with a label, front only), the empty end of a strip's shorter last piece (to cut
+   * off) and cut guides at its end, on one side of printed sheet `paper`.
+   */
+  joins(
+    paper: number,
+    side: 'front' | 'back',
+  ): { tabs: { rect: Rect; label: string }[]; waste: Rect[]; guides: Segment[] };
   /** TrimBox and BleedBox for one side: the front's, mirrored on the back like its panels. */
   boxes(side: 'front' | 'back'): { trim: Rect; bleed: Rect };
   /** Crop and fold marks for one side (an off-centre layout's cut lines mirror on the back). */
@@ -222,18 +254,24 @@ export function layoutSheets(
   page: { w: number; h: number },
   o: PrintOptions,
 ): SheetLayout {
-  const { cols, rows } = plan.grid;
-  const sections = o.sheet.kind === 'fit' ? null : (o.sections ?? null);
-  const paper = paperPlan(plan.sheets.length, plan.grid, o.gang ?? NO_GANG, sections);
+  const join = activeJoin(o, plan.grid);
+  // A long strip in pieces: the pieces are the units laid out, each like a sheet of its own.
+  const split = join ? splitStrip(plan, join.panels) : null;
+  const units0 = split?.plan ?? plan;
+  const { cols, rows } = units0.grid;
+  const sections = o.sheet.kind === 'fit' || join ? null : (o.sections ?? null);
+  const paper = paperPlan(units0.sheets.length, units0.grid, o.gang ?? NO_GANG, sections);
   if (paper.sectioned) return layoutSections(plan, page, o, paper);
   const gang = paper.gang;
   const { across, down } = gang.gang;
   const unitW = cols * page.w;
   const unitH = rows * page.h;
+  // A glue tab past each piece's last panel (as the gap, it does not scale).
+  const tab = join ? Math.max(0, join.tab) * MM : 0;
   const bleed = Math.max(0, o.bleed) * MM;
   // Between units: each unit's own bleed, plus room to cut.
   const gap = across * down > 1 ? 2 * bleed + Math.max(0, o.gutter ?? 0) * MM : 0;
-  const gangW = (s: number) => across * unitW * s + (across - 1) * gap;
+  const gangW = (s: number) => across * (unitW * s + tab) + (across - 1) * gap;
   const gangH = (s: number) => down * unitH * s + (down - 1) * gap;
   const marks = o.cropMarks || o.foldMarks;
   // Room needed around the trim, beyond which nothing is drawn. It is the same on every side, so
@@ -246,6 +284,11 @@ export function layoutSheets(
     o.slug && !marks ? bleed + SLUG_ROOM : 0,
   );
   const warnings: string[] = [];
+  if (tab > 0 && plan.sheets.some((sh) => sh.back.length > 0)) {
+    warnings.push(
+      `Each glue tab goes under the next piece's first panel and covers ${fmtMm(tab)} mm of its back: keep artwork clear there.`,
+    );
+  }
 
   let width: number;
   let height: number;
@@ -269,7 +312,7 @@ export function layoutSheets(
     // between units do not scale.
     const fitScale = (w: number, h: number) =>
       Math.min(
-        (w - 2 * (margin + reserve) - (across - 1) * gap) / (across * unitW),
+        (w - 2 * (margin + reserve) - (across - 1) * gap - across * tab) / (across * unitW),
         (h - 2 * (margin + reserve) - (down - 1) * gap) / (down * unitH),
       );
     let landscape: boolean;
@@ -305,7 +348,8 @@ export function layoutSheets(
     w: tw + 2 * bleed,
     h: th + 2 * bleed,
   };
-  const uw = unitW * scale;
+  const pw = page.w * scale;
+  const uw = unitW * scale + tab;
   const uh = unitH * scale;
   const units: Rect[][] = Array.from({ length: down }, (_, r) =>
     Array.from({ length: across }, (_, c) => ({
@@ -344,8 +388,10 @@ export function layoutSheets(
   }
   const foldMarks: Segment[] = [];
   if (o.foldMarks) {
+    // A piece's tab is glued under the next piece, whose edge lines up with the tab's root: it
+    // folds there like any other panel line.
     for (const u of units[0]!)
-      for (let c = 1; c < cols; c++) vertical(u.x + c * page.w * scale, foldMarks);
+      for (let c = 1; c < (tab > 0 ? cols + 1 : cols); c++) vertical(u.x + c * pw, foldMarks);
     for (const u of units.map((r) => r[0]!)) {
       for (let r = 1; r < rows; r++) horizontal(u.y + u.h - r * page.h * scale, foldMarks);
     }
@@ -368,6 +414,15 @@ export function layoutSheets(
     paper,
     units,
     blanks: [],
+    pieces: split?.pieces ?? null,
+    joins: joiner(split?.pieces ?? null, plan.sheets.length, gang, units, {
+      cols,
+      pw,
+      tab,
+      width,
+      height,
+      backRotated,
+    }),
     backRotated,
     printerFlip,
     cropMarks,
@@ -376,7 +431,60 @@ export function layoutSheets(
     marks: sideMarks(cropMarks, foldMarks, width, height, backRotated),
     slugAt,
     warnings,
-    place: placer(plan, gang, units, width, height, backRotated),
+    place: placer(units0, gang, units, width, height, backRotated, {
+      tab,
+      used: (sheet) => split?.pieces[sheet]?.count ?? cols,
+    }),
+  };
+}
+
+const NO_JOINS = { tabs: [], waste: [], guides: [] };
+
+/**
+ * Glue tabs and waste on a printed sheet of pieces. On the front a piece's tab is right of its
+ * last panel; a strip's last piece has none, and the columns it leaves empty (and the tab's room)
+ * are cut off. The back shows the same rectangles turned over.
+ */
+function joiner(
+  pieces: Piece[] | null,
+  strips: number,
+  gang: GangPlan,
+  units: Rect[][],
+  g: { cols: number; pw: number; tab: number; width: number; height: number; backRotated: boolean },
+): SheetLayout['joins'] {
+  if (!pieces) return () => NO_JOINS;
+  return (paper, side) => {
+    const out: ReturnType<SheetLayout['joins']> = { tabs: [], waste: [], guides: [] };
+    const flip = (r: Rect) =>
+      side === 'front' ? r : mirrorRect(r, g.width, g.height, g.backRotated);
+    units.forEach((row, ur) =>
+      row.forEach((u, uc) => {
+        const at = gang.sheetAt(paper, uc, ur);
+        const p = at === null ? undefined : pieces[at];
+        if (!p) return;
+        const end = u.x + p.count * g.pw;
+        if (p.index < p.of - 1) {
+          if (g.tab > 0) {
+            out.tabs.push({
+              rect: flip({ x: u.x + g.cols * g.pw, y: u.y, w: g.tab, h: u.h }),
+              label: `${pieceName(p, strips)} · glue under piece ${p.index + 2}`,
+            });
+          }
+        } else if (u.x + u.w - end > 0.5) {
+          out.waste.push(flip({ x: end, y: u.y, w: u.x + u.w - end, h: u.h }));
+          const ticks: Segment[] = [
+            { x1: end, y1: u.y + u.h, x2: end, y2: u.y + u.h - CUT_GUIDE },
+            { x1: end, y1: u.y, x2: end, y2: u.y + CUT_GUIDE },
+          ];
+          for (const t of ticks) {
+            const a = flip({ x: t.x1, y: t.y1, w: 0, h: 0 });
+            const b = flip({ x: t.x2, y: t.y2, w: 0, h: 0 });
+            out.guides.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+          }
+        }
+      }),
+    );
+    return out;
   };
 }
 
@@ -392,8 +500,11 @@ function placer(
   width: number,
   height: number,
   backRotated: boolean,
+  /** Pieces of a strip: the tab right of the front's panels, and the columns each piece uses. */
+  pieces: { tab: number; used: (sheet: number) => number } = { tab: 0, used: () => plan.grid.cols },
 ) {
   const { cols, rows } = plan.grid;
+  const { tab } = pieces;
   return (paper: number, side: 'front' | 'back'): PlacedSlot[] => {
     const out: PlacedSlot[] = [];
     const turn = side === 'back' && backRotated;
@@ -402,11 +513,17 @@ function placer(
         const sheet = gang.sheetAt(paper, uc, ur);
         if (sheet === null) return;
         const unit = side === 'back' ? { ...front, x: width - front.x - front.w } : front;
-        const pw = unit.w / cols;
+        // The tab is right of the front's panels, so left of the back's.
+        const x0 = unit.x + (side === 'back' ? tab : 0);
+        const pw = (unit.w - tab) / cols;
         const ph = unit.h / rows;
+        // Columns holding panels (a shorter last piece leaves the rest of the front's end empty).
+        const used = pieces.used(sheet);
+        const firstCol = side === 'back' ? cols - used : 0;
+        const lastCol = side === 'back' ? cols - 1 : used - 1;
         for (const slot of plan.sheets[sheet]?.[side] ?? []) {
           let rect: Rect = {
-            x: unit.x + slot.col * pw,
+            x: x0 + slot.col * pw,
             y: unit.y + (rows - 1 - slot.row) * ph,
             w: pw,
             h: ph,
@@ -415,8 +532,8 @@ function placer(
           let outer = {
             top: slot.row === 0,
             bottom: slot.row === rows - 1,
-            left: slot.col === 0,
-            right: slot.col === cols - 1,
+            left: slot.col === firstCol,
+            right: slot.col === lastCol,
           };
           if (turn) {
             // A back printed for a top ↔ bottom flip is the back view turned 180° on the page.
@@ -476,7 +593,7 @@ export function sectionPageSize(
   o: PrintOptions,
   grid: { cols: number; rows: number },
 ): { w: number; h: number } | null {
-  if (o.sheet.kind === 'fit' || !o.sections) return null;
+  if (o.sheet.kind === 'fit' || !o.sections || activeJoin(o, grid)) return null;
   const { across, down } = paperPlan(1, grid, NO_GANG, o.sections).paper;
   const { width, height } = sheetSize(o, { ...o.sections, across, down });
   return { w: width / across, h: height / down };
@@ -595,6 +712,8 @@ function layoutSections(
     paper,
     units,
     blanks,
+    pieces: null,
+    joins: () => NO_JOINS,
     backRotated,
     printerFlip,
     cropMarks,

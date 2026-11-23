@@ -158,6 +158,14 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    sheet cards on the Sheets tab (the reading-order strip highlights the dragged sheet's pages),
    use their earlier/later buttons, or type the order. _(done)_
 6. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
+   **Long strips in pieces** (`src/engine/join.ts`, `PrintOptions.join`): an accordion can have any
+   number of panels (the Panels field rebuilds `accordion(n)`); a strip longer than the sheet
+   prints in pieces cut at its fold lines, each like a sheet of its own (so several fit per sheet),
+   with a glue tab past every piece but the last. The tab goes under the next piece's first panel
+   (covering that much of its back) and its root is marked as a fold; a shorter last piece's empty
+   end is labelled and cut off. "Fit the sheet" picks the longest pieces that fit, then as many per
+   sheet as fit. The 3D model starts from the whole strip. _(next: proofing pieces, gluing in
+   3D)_
 7. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
 
 ## Bug reports
