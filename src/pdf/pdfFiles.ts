@@ -246,6 +246,8 @@ async function drawSide(
   side: 'front' | 'back',
   bleed: number,
   extras: {
+    /** For the labels on glue tabs and waste. */
+    font: PDFFont;
     slug: { font: PDFFont; text: string } | null;
     registration: PDFRef;
     /** Book page (1-based) → source PDF page (1-based), null for a blank page. */
@@ -276,6 +278,7 @@ async function drawSide(
       rotate: degrees(p.rotateCcw),
     });
   }
+  drawJoins(page, layout.joins(paper, side), side, bleed, extras.font, registration);
   drawMarks(page, layout.marks(side), registration);
   if (slug && layout.slugAt) {
     page.drawText(`${slug.text} · sheet ${paper + 1} of ${layout.gang.papers} ${side}`, {
@@ -311,6 +314,54 @@ function registrationColorSpace(doc: PDFDocument): PDFRef {
 }
 
 const REG_CS = 'CSRegistration';
+
+/** Labels on tabs and waste: small, light, and read along the tab (bottom to top). */
+const JOIN_LABEL = 6;
+const JOIN_INK = cmyk(0, 0, 0, 0.55);
+
+/**
+ * A strip printed in pieces: glue tabs are tinted and labelled on the front (the glue goes there;
+ * their backs stay blank), and a last piece's empty end is labelled "cut off" with cut guides at
+ * its edge. Drawn over the pages, so bleed running into a tab is covered.
+ */
+function drawJoins(
+  page: PDFPage,
+  joins: ReturnType<SheetLayout['joins']>,
+  side: 'front' | 'back',
+  bleed: number,
+  font: PDFFont,
+  registration: PDFRef,
+) {
+  const along = (text: string, r: { x: number; y: number; w: number; h: number }) => {
+    if (r.w < JOIN_LABEL * 1.4) return;
+    let size = JOIN_LABEL;
+    const width = font.widthOfTextAtSize(text, size);
+    if (width > r.h - 4 * MM) size = Math.max(3, (size * (r.h - 4 * MM)) / width);
+    const w = font.widthOfTextAtSize(text, size);
+    // Rotated 90° anticlockwise: the baseline runs up the rectangle's centre line.
+    page.drawText(text, {
+      x: r.x + r.w / 2 + size * 0.35,
+      y: r.y + (r.h - w) / 2,
+      size,
+      font,
+      color: JOIN_INK,
+      rotate: degrees(90),
+    });
+  };
+  if (side === 'front') {
+    for (const t of joins.tabs) {
+      const { x, y, w, h } = t.rect;
+      page.drawRectangle({ x, y, width: w, height: h, color: cmyk(0, 0, 0, 0.1) });
+      along(t.label, t.rect);
+    }
+    for (const w of joins.waste) {
+      // Clear of the last panel's bleed.
+      const free = { ...w, x: w.x + bleed, w: w.w - bleed };
+      along('cut off', free);
+    }
+  }
+  drawMarks(page, { crop: joins.guides, fold: [] }, registration);
+}
 
 function drawMarks(
   page: PDFPage,
@@ -395,6 +446,7 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
     return {
       doc,
       extras: {
+        font,
         slug: options.slug ? { font, text: asciiOnly(title) } : null,
         registration: registrationColorSpace(doc),
         source,

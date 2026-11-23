@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  accordion,
   buildPlan,
   builtinRecipes,
+  isAccordion,
   NO_GANG,
   paperPlan,
   pagesPerSheet,
@@ -12,7 +14,7 @@ import {
   type Recipe,
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
-import { sectionPageSize } from '../pdf/geometry';
+import { activeJoin, sectionPageSize } from '../pdf/geometry';
 import {
   DEFAULT_IMPOSED,
   moveSheet,
@@ -179,8 +181,13 @@ export function App() {
     print.options.sheet.kind === 'fit' ? null : (print.options.sections ?? null);
   const proofGang = imposed.gang ?? NO_GANG;
   const proofSections = imposed.sections ?? null;
+  // Printed in pieces glued end to end: the model starts from the whole strip.
+  const joined = plan ? activeJoin(print.options, plan.grid) !== null : false;
   const gang = useMemo(() => {
     if (!plan) return null;
+    if (joined && pdf?.mode !== 'imposed') {
+      return paperPlan(plan.sheets.length, plan.grid, NO_GANG, null);
+    }
     // Proofing an imposed PDF: start from its printed sheets, cut the way it says.
     if (pdf?.mode === 'imposed') {
       return paperPlan(plan.sheets.length, plan.grid, proofGang, proofSections);
@@ -189,6 +196,7 @@ export function App() {
   }, [
     plan,
     pdf?.mode,
+    joined,
     printGang.across,
     printGang.down,
     printGang.order,
@@ -375,6 +383,16 @@ export function App() {
           </select>
         </label>
         {active.description && <p className="desc">{active.description}</p>}
+        {isAccordion(active) && (
+          <PanelsField
+            value={active.grid.cols}
+            onChange={(n) => {
+              logEvent('accordionPanels', { panels: n });
+              setReportRecipe(null);
+              setText(pretty(accordion(n)));
+            }}
+          />
+        )}
 
         <div className="row">
           <label>
@@ -575,5 +593,31 @@ export function App() {
         )}
       </main>
     </div>
+  );
+}
+
+/** Panels of an accordion (any number: a long one prints in pieces glued end to end). */
+const MAX_PANELS = 48;
+function PanelsField({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  // Typed text is kept while it is not a usable count yet (e.g. "1" on the way to "12").
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+  return (
+    <label>
+      Panels
+      <input
+        type="number"
+        min={2}
+        max={MAX_PANELS}
+        value={text}
+        title={`2–${MAX_PANELS}; longer than the sheet? Print it in pieces on the Print tab`}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Math.floor(Number(e.target.value));
+          if (n >= 2 && n <= MAX_PANELS && n !== value) onChange(n);
+        }}
+        onBlur={() => setText(String(value))}
+      />
+    </label>
   );
 }
