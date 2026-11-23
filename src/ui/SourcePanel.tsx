@@ -54,30 +54,46 @@ export function SourcePanel({
     mode.current = m;
     input.current?.click();
   };
-  const run = async (task: () => Promise<void>) => {
+  /**
+   * Bumps whenever a newer open or rebuild starts, or the source is closed: a task that finishes
+   * after that is stale, and its result is dropped instead of bringing the source back.
+   */
+  const generation = useRef(0);
+  const run = async (task: () => Promise<LoadedPdf>, use: (pdf: LoadedPdf) => void) => {
+    const gen = ++generation.current;
+    const stale = () => gen !== generation.current;
     setBusy(true);
     setError(null);
     try {
-      await task();
+      const loaded = await task();
+      if (stale()) void loaded.js.loadingTask.destroy();
+      else use(loaded);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!stale()) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (!stale()) setBusy(false);
     }
   };
-  const load = (file: File) => run(async () => onOpen(await openPdfFile(file, mode.current)));
+  const load = (file: File) => run(() => openPdfFile(file, mode.current), onOpen);
   const loadImages = (files: File[]) =>
     run(async () => {
       const { openImageFiles } = await import('./imageFiles');
-      onOpen(await openImageFiles(files, pdf?.images?.options ?? DEFAULT_IMAGE_PAGES));
-    });
+      return openImageFiles(files, pdf?.images?.options ?? DEFAULT_IMAGE_PAGES);
+    }, onOpen);
   const rebuild = (options: ImagePageOptions) => {
     const images = pdf?.images;
     if (!images) return;
     void run(async () => {
       const { imagesPdf } = await import('./imageFiles');
-      onReplace(await imagesPdf(images.list, options));
-    });
+      return imagesPdf(images.list, options);
+    }, onReplace);
+  };
+  const close = () => {
+    // Whatever is still opening or rebuilding is for the source being closed.
+    generation.current++;
+    setBusy(false);
+    setError(null);
+    onClose();
   };
 
   const first = pdf?.info[0];
@@ -351,7 +367,7 @@ export function SourcePanel({
             </div>
           )}
           <div className="buttons">
-            <button onClick={onClose}>{pdf.images ? 'Close images' : 'Close PDF'}</button>
+            <button onClick={close}>{pdf.images ? 'Close images' : 'Close PDF'}</button>
           </div>
         </>
       )}
