@@ -19,8 +19,9 @@ import {
   type PdfPageInfo,
 } from '../pdf/imposed';
 import { fitInPanel, type Rect } from '../pdf/geometry';
-import { pageSource } from '../pdf/pageOrder';
+import { pageEntries, pageSource, type PageEntry } from '../pdf/pageOrder';
 import type { PdfJsDoc } from '../pdf/render';
+import type { ImagePageOptions, SourceImage } from '../pdf/images';
 
 export interface LoadedPdf {
   name: string;
@@ -29,6 +30,15 @@ export interface LoadedPdf {
   js: PdfJsDoc;
   /** 'reading': one page per finished page. 'imposed': print-ready sheets to proof. */
   mode: 'reading' | 'imposed';
+  /** Set when the pages PDF was built from single images (rebuilt when its options change). */
+  images?: ImageSet;
+}
+
+/** The images a pages PDF was built from, and how. */
+export interface ImageSet {
+  /** In page order (file names, natural sort). */
+  list: SourceImage[];
+  options: ImagePageOptions;
 }
 
 export type PanelArt = (
@@ -91,8 +101,8 @@ export function usePdfArt(
   pdf: LoadedPdf | null,
   plan: Plan | null,
   imposed: ImposedOptions,
-  /** A reading-order PDF's pages in another order (see `pageSource`). */
-  pageOrder?: number[],
+  /** A reading-order PDF's pages in another order, with blank pages (see `pageSource`). */
+  pageOrder?: PageEntry[],
 ): PdfArt | null {
   const pages = useRef(new Map<number, HTMLCanvasElement>());
   const [version, setVersion] = useState(0);
@@ -165,9 +175,28 @@ export function usePdfArt(
           ? null
           : cached(`${page}:${turn}`, page - 1, trimOf(page - 1), turn, panelAspect);
       const source = pageSource(pageOrder, pdf.info.length);
-      // `page` is a book page (1-based), read from wherever the page order puts it.
-      const pageImage = (page: number | null, turn: number) =>
-        page === null ? null : pdfPageImage(source(page), turn);
+      // A blank page the user inserted: plain paper, in the panel's shape.
+      const blankImage = (turn: number) => {
+        const key = `blank:${turn}`;
+        const hit = cache.get(key);
+        if (hit) return hit;
+        const out = document.createElement('canvas');
+        const [w, h] = [64, Math.max(1, Math.round(64 * panelAspect))];
+        [out.width, out.height] = turn % 180 === 0 ? [w, h] : [h, w];
+        const ctx = out.getContext('2d')!;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, out.width, out.height);
+        cache.set(key, out);
+        return out;
+      };
+      // `page` is a book page (1-based), read from wherever the page order puts it. Blanks the
+      // plan adds past the book (`page` null or past it) have no art.
+      const book = pageEntries(pageOrder, pdf.info.length).length;
+      const pageImage = (page: number | null, turn: number) => {
+        if (page === null || page < 1 || page > book) return null;
+        const src = source(page);
+        return src === null ? blankImage(turn) : pdfPageImage(src, turn);
+      };
       return {
         art: (sheet, side, col, row) => {
           const slot = bySlot.get(`${sheet}:${side}:${col}:${row}`);

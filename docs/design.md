@@ -134,7 +134,27 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    `pageOrder[i]`, 0-based), applied wherever a source page is looked up (2D sheets, 3D model,
    export): on the Sheets tab, select pages (click, Shift-click for a range, Cmd/Ctrl-click to
    toggle) and drag them as a block, or move them with the earlier/later buttons; each moved page
-   shows where it came from. _(done)_
+   shows where it came from. **Blank pages** are entries in the same order (`null`), not pages
+   added to the PDF: "+ Blank before/after" inserts one next to the selection (or at the start/end
+   of the book), blanks move like pages, and "Remove blank" (or Delete) takes the selected ones
+   out; Reset restores the PDF's order without blanks. The book has the PDF's pages plus the
+   blanks, so the plan counts them as pages (the plan's own padding comes after). `pageEntries`
+   normalises any stored order (every PDF page once, blanks kept in place) and `pageSource` maps a
+   book page to its PDF page or `null`, so the 2D sheets and 3D model (plain white paper), the
+   export (nothing drawn) and bug reports (`input.pageOrder`, with `null`s) all treat a blank in
+   one place. _(done)_
+   **Images as pages**: "Open images…" takes several image files, one page each, in file-name
+   order (natural sort: "2" before "10"). `src/pdf/images.ts` builds an in-memory reading-order
+   PDF with pdf-lib that loads like any pages PDF, so the sheets, 3D model, page order and export
+   need nothing new. PNG and JPEG are embedded as they are, at full resolution (JPEG not
+   re-encoded; its EXIF orientation applied by the drawing matrix); WebP, GIF, AVIF, BMP, SVG… are
+   decoded by the browser and converted to PNG through a canvas at their natural size
+   (`src/ui/imageFiles.ts`). Every page has one size, as the exporter expects: by default the
+   first image's shape with its long side 210 mm, or a size from `PAGE_SIZES`, portrait or
+   landscape. Each image is either fitted (whole image, centred, white margins) or fills the page
+   (cropped to cover; the overflow outside the page stays in the page's content, so it prints as
+   real bleed). Changing the size or fit rebuilds the PDF from the images already read and keeps
+   the page order. Bug reports list the image file names and options, not the pixels.
 4. **Verification** — open an imposed PDF and proof it: sheet sides are read in duplex,
    fronts-then-backs or single-sided order (optionally with upside-down backs), cut into panels by
    the recipe (TrimBox or margins), shown on the sheets, as an upright reading-order strip, and in

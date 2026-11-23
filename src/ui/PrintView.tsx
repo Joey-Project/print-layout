@@ -12,6 +12,7 @@ import {
   type PrintPreset,
 } from '../pdf/geometry';
 import { physicalSize, type ImposedOptions } from '../pdf/imposed';
+import type { PageEntry } from '../pdf/pageOrder';
 import { logEvent } from './debugReport';
 import type { LoadedPdf } from './pdfArt';
 
@@ -90,7 +91,7 @@ export function PrintView({
   pdf: LoadedPdf | null;
   imposed: ImposedOptions;
   /** A reading-order PDF's pages in another order (see `pageSource`). */
-  pageOrder?: number[];
+  pageOrder?: PageEntry[];
   settings: PrintSettings;
   onSettings: (s: PrintSettings) => void;
 }) {
