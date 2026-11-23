@@ -30,6 +30,7 @@ import {
   type ViewerState,
 } from './debugReport';
 import { PlanView } from './SheetView';
+import { PageOrderStrip } from './PageOrderStrip';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
 
@@ -63,6 +64,8 @@ export function App() {
   const [view, setView] = useState<'2d' | '3d' | 'print'>('2d');
   const [pdf, setPdf] = useState<LoadedPdf | null>(null);
   const [imposed, setImposed] = useState<ImposedOptions>(DEFAULT_IMPOSED);
+  /** A reading-order PDF's pages in another order: book page i + 1 is PDF page `pageOrder[i]`. */
+  const [pageOrder, setPageOrder] = useState<number[] | undefined>(undefined);
   const [print, setPrint] = useState<PrintSettings>(DEFAULT_PRINT);
   const viewerDebug = useRef<ViewerDebug | null>(null);
   const [restore, setRestore] = useState<ViewerState | null>(null);
@@ -134,7 +137,8 @@ export function App() {
 
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
-  const pdfArt = usePdfArt(pdf, plan, imposed);
+  const readingOrder = pdf?.mode === 'reading' ? pageOrder : undefined;
+  const pdfArt = usePdfArt(pdf, plan, imposed, readingOrder);
   // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
   const printGang = print.options.gang ?? NO_GANG;
   // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
@@ -192,6 +196,7 @@ export function App() {
         view,
         print,
         imposed,
+        pageOrder: readingOrder,
       },
       viewer: snap?.state ?? null,
       derived: {
@@ -242,6 +247,7 @@ export function App() {
     setView(input.view);
     if (input.print) setPrint(input.print);
     if (input.imposed) setImposed(input.imposed);
+    setPageOrder(input.pageOrder);
     setRestore(input.view === '3d' ? report.viewer : null);
   };
 
@@ -370,6 +376,8 @@ export function App() {
           onOpen={(p) => {
             logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
             setPdf(p);
+            // A new PDF starts in its own page order.
+            setPageOrder(undefined);
             // A new imposed PDF: every position holds a sheet until told otherwise.
             if (imposed.pages !== undefined) setImposed({ ...imposed, pages: undefined });
             setView(p.mode === 'imposed' ? '2d' : view);
@@ -455,19 +463,33 @@ export function App() {
                 </button>
               </div>
               {view === '2d' ? (
-                <PlanView
-                  plan={plan}
-                  hovered={hovered}
-                  onHover={setHovered}
-                  pdfArt={pdfArt}
-                  showReading={pdf?.mode === 'imposed'}
-                />
+                <>
+                  {pdf?.mode === 'reading' && pdfArt && (
+                    <PageOrderStrip
+                      n={pdf.info.length}
+                      order={pageOrder}
+                      art={pdfArt}
+                      onChange={(order) => {
+                        logEvent('pageOrder', { order: order ?? null });
+                        setPageOrder(order);
+                      }}
+                    />
+                  )}
+                  <PlanView
+                    plan={plan}
+                    hovered={hovered}
+                    onHover={setHovered}
+                    pdfArt={pdfArt}
+                    showReading={pdf?.mode === 'imposed'}
+                  />
+                </>
               ) : view === 'print' ? (
                 <PrintView
                   plan={plan}
                   recipe={active}
                   pdf={pdf}
                   imposed={imposed}
+                  pageOrder={readingOrder}
                   settings={print}
                   onSettings={(s) => {
                     logEvent('printSettings', { ...s.options });

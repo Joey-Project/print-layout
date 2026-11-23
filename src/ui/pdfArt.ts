@@ -19,6 +19,7 @@ import {
   type PdfPageInfo,
 } from '../pdf/imposed';
 import { fitInPanel, type Rect } from '../pdf/geometry';
+import { pageSource } from '../pdf/pageOrder';
 import type { PdfJsDoc } from '../pdf/render';
 
 export interface LoadedPdf {
@@ -42,6 +43,8 @@ export interface PdfArt {
   art: PanelArt;
   /** Upright image of a reading position (for the reading-order strip). */
   reading: (position: number) => HTMLCanvasElement | null;
+  /** Upright image of a reading-order PDF's own page (1-based), whatever its place in the book. */
+  sourcePage: (page: number) => HTMLCanvasElement | null;
   /** Bumps as pages finish rendering. */
   version: number;
   /** Finished page height / width. */
@@ -88,6 +91,8 @@ export function usePdfArt(
   pdf: LoadedPdf | null,
   plan: Plan | null,
   imposed: ImposedOptions,
+  /** A reading-order PDF's pages in another order (see `pageSource`). */
+  pageOrder?: number[],
 ): PdfArt | null {
   const pages = useRef(new Map<number, HTMLCanvasElement>());
   const [version, setVersion] = useState(0);
@@ -151,18 +156,25 @@ export function usePdfArt(
       };
       const first = pdf.info[0];
       const size = first ? displayedSize(first.trim, first.rotate) : { w: 1, h: Math.SQRT2 };
-      // Every panel has the first page's shape (as on the exported sheet); other pages are fitted.
+      // Every panel has the PDF's first page's shape (as on the exported sheet, whatever the page
+      // order); other pages are fitted.
       const panelAspect = size.h / size.w;
-      const pageImage = (page: number | null, turn: number) =>
-        page === null || page > pdf.info.length
+      // `page` is the PDF's own page (1-based).
+      const pdfPageImage = (page: number, turn: number) =>
+        page < 1 || page > pdf.info.length
           ? null
           : cached(`${page}:${turn}`, page - 1, trimOf(page - 1), turn, panelAspect);
+      const source = pageSource(pageOrder, pdf.info.length);
+      // `page` is a book page (1-based), read from wherever the page order puts it.
+      const pageImage = (page: number | null, turn: number) =>
+        page === null ? null : pdfPageImage(source(page), turn);
       return {
         art: (sheet, side, col, row) => {
           const slot = bySlot.get(`${sheet}:${side}:${col}:${row}`);
           return slot ? pageImage(slot.page, slot.rotation) : null;
         },
         reading: (pos) => pageImage(byPos.get(pos)?.slot.page ?? null, 0),
+        sourcePage: (page) => pdfPageImage(page, 0),
         version,
         aspect: size.h / size.w,
         rendered,
@@ -195,10 +207,11 @@ export function usePdfArt(
         const turn = (r.turn + at.slot.rotation) % 360;
         return cached(key(r, turn), r.index, r.rect, turn);
       },
+      sourcePage: () => null,
       version,
       aspect,
       rendered,
       total: pdf.info.length,
     };
-  }, [pdf, plan, imposed, version, rendered]);
+  }, [pdf, plan, imposed, pageOrder, version, rendered]);
 }

@@ -528,4 +528,38 @@ describe('PDF export and de-imposition round trip', () => {
       Array.from({ length: 12 }, (_, i) => String(i + 1)),
     );
   });
+
+  it('imposes a reading-order PDF whose pages are shuffled, once put back in order', async () => {
+    // 10 pages: the plan pads to 12 with blanks, which must stay blank.
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 10);
+    const dummy = await loadPdf(await (await placeholderPdf(10, A5)).save());
+    // The PDF's page j is the dummy's page shuffled[j] + 1.
+    const shuffled = [3, 9, 0, 7, 1, 8, 2, 6, 4, 5];
+    const doc = await PDFDocument.create();
+    for (const p of await doc.copyPages(dummy, shuffled)) doc.addPage(p);
+    const source = await doc.save();
+    // Book page i + 1 is the PDF page holding dummy page i + 1.
+    const pageOrder = Array.from({ length: 10 }, (_, i) => shuffled.indexOf(i));
+    const reading = async (order?: number[]) => {
+      const { files } = await exportImposed({
+        plan,
+        recipe: r,
+        source,
+        dummyPageSize: A5,
+        options: opts('home'),
+        baseName: 'test',
+        pageOrder: order,
+      });
+      const back = await deimposePdf(files[0]!.bytes, plan, DEFAULT_IMPOSED, 't');
+      return (await visibleNumbers(back.bytes)).map((n) => n.join());
+    };
+    const bySlot = new Map(
+      plan.sheets.flatMap((s) => [...s.front, ...s.back]).map((s) => [s.position, s.page]),
+    );
+    const want = Array.from({ length: plan.slotCount }, (_, i) => String(bySlot.get(i + 1) ?? ''));
+    expect(want.filter(Boolean)).toHaveLength(10);
+    expect(await reading()).not.toEqual(want);
+    expect(await reading(pageOrder)).toEqual(want);
+  });
 });
