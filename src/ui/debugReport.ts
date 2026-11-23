@@ -62,6 +62,8 @@ export interface DebugReport {
     print?: PrintSettings;
     /** How an imposed PDF is read (absent in older reports). */
     imposed?: ImposedOptions;
+    /** A reading-order PDF's pages in another order (absent in older reports and when unmoved). */
+    pageOrder?: number[];
   };
   viewer: ViewerState | null;
   derived: Record<string, unknown>;

@@ -49,6 +49,7 @@ import {
   type PdfPageInfo,
   slotsByPosition,
 } from './imposed';
+import { pageSource } from './pageOrder';
 
 const asRect = (b: { x: number; y: number; width: number; height: number }): Rect => ({
   x: b.x,
@@ -244,13 +245,19 @@ async function drawSide(
   paper: number,
   side: 'front' | 'back',
   bleed: number,
-  extras: { slug: { font: PDFFont; text: string } | null; registration: PDFRef },
+  extras: {
+    slug: { font: PDFFont; text: string } | null;
+    registration: PDFRef;
+    /** Book page (1-based) → source PDF page (1-based). */
+    source: (page: number) => number;
+  },
 ) {
   const { slug, registration } = extras;
   const page = out.addPage([layout.width, layout.height]);
   for (const placed of layout.place(paper, side)) {
-    const n = placed.slot.page;
-    if (n === null || n > info.length) continue;
+    if (placed.slot.page === null) continue;
+    const n = extras.source(placed.slot.page);
+    if (n < 1 || n > info.length) continue;
     const srcPage = src.getPage(n - 1);
     if (!hasContents(srcPage)) continue; // a truly empty page: nothing to draw
     const p = placePage(
@@ -347,6 +354,11 @@ export interface ExportInput {
   baseName: string;
   /** Only this printed sheet (for a quick preview). */
   onlySheet?: number;
+  /**
+   * The source's pages in another order: book page i + 1 is the source's page `pageOrder[i]`
+   * (0-based; normalised to a permutation of its pages). Unset: the source's own order.
+   */
+  pageOrder?: number[];
 }
 
 /** Impose the source onto print-ready sheets. */
@@ -371,6 +383,7 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
       : Array.from({ length: layout.gang.papers }, (_, i) => i);
   const hasBacks = plan.sheets.some((s) => s.back.length > 0);
   const title = `${input.baseName} · ${recipe.name}`;
+  const source = pageSource(input.pageOrder, info.length);
 
   const make = async () => {
     const doc = await PDFDocument.create();
@@ -383,6 +396,7 @@ export async function exportImposed(input: ExportInput): Promise<ExportResult> {
       extras: {
         slug: options.slug ? { font, text: asciiOnly(title) } : null,
         registration: registrationColorSpace(doc),
+        source,
       },
     };
   };

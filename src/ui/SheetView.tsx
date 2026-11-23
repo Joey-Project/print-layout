@@ -3,7 +3,7 @@ import type { Grid, Plan, Slot } from '../engine';
 import type { PdfArt } from './pdfArt';
 
 /** Draws a rendered page image, scaled to fill the element. */
-function ArtCanvas({ image, className }: { image: HTMLCanvasElement; className?: string }) {
+export function ArtCanvas({ image, className }: { image: HTMLCanvasElement; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;

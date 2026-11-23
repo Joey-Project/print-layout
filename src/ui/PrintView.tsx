@@ -80,6 +80,7 @@ export function PrintView({
   recipe,
   pdf,
   imposed,
+  pageOrder,
   settings,
   onSettings,
 }: {
@@ -87,6 +88,8 @@ export function PrintView({
   recipe: Recipe;
   pdf: LoadedPdf | null;
   imposed: ImposedOptions;
+  /** A reading-order PDF's pages in another order (see `pageSource`). */
+  pageOrder?: number[];
   settings: PrintSettings;
   onSettings: (s: PrintSettings) => void;
 }) {
@@ -156,6 +159,7 @@ export function PrintView({
             plan,
             recipe,
             source: source?.bytes ?? null,
+            pageOrder: source ? pageOrder : undefined,
             dummyPageSize: dummySize(settings.dummyPage),
             options: { ...o, sides: 'duplex' },
             baseName: base,
@@ -174,7 +178,7 @@ export function PrintView({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [plan, recipe, source, settings.dummyPage, o, sheetShown, base, pdf?.mode]);
+  }, [plan, recipe, source, pageOrder, settings.dummyPage, o, sheetShown, base, pdf?.mode]);
 
   const download = async () => {
     setBusy(true);
@@ -186,6 +190,7 @@ export function PrintView({
         plan,
         recipe,
         source: source?.bytes ?? null,
+        pageOrder: source ? pageOrder : undefined,
         dummyPageSize: dummySize(settings.dummyPage),
         options: o,
         baseName: base,

@@ -129,7 +129,12 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    backs as two PDFs, backs optionally reversed) and print shop (exact size, bleed on outer edges,
    crop and fold marks, sheet labels, TrimBox/BleedBox). Any preset or custom sheet size,
    orientation, scaling, margin and bleed. Without a PDF it exports a numbered dummy for a paper
-   test. A live preview renders the real exported sheet. _(done)_
+   test. A live preview renders the real exported sheet. The pages can be put in another order
+   first (`pageOrder` in `src/pdf/pageOrder.ts`: book page i + 1 is the PDF's page
+   `pageOrder[i]`, 0-based), applied wherever a source page is looked up (2D sheets, 3D model,
+   export): on the Sheets tab, select pages (click, Shift-click for a range, Cmd/Ctrl-click to
+   toggle) and drag them as a block, or move them with the earlier/later buttons; each moved page
+   shows where it came from. _(done)_
 4. **Verification** — open an imposed PDF and proof it: sheet sides are read in duplex,
    fronts-then-backs or single-sided order (optionally with upside-down backs), cut into panels by
    the recipe (TrimBox or margins), shown on the sheets, as an upright reading-order strip, and in
