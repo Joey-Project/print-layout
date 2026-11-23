@@ -9,7 +9,14 @@ import {
   PRINT_PRESETS,
   type PrintOptions,
 } from '../src/pdf/geometry';
-import { DEFAULT_IMPOSED, proofLayout, type PdfPageInfo } from '../src/pdf/imposed';
+import {
+  DEFAULT_IMPOSED,
+  inPdfOrder,
+  moveSheet,
+  proofLayout,
+  sheetPermutation,
+  type PdfPageInfo,
+} from '../src/pdf/imposed';
 import type { Gang } from '../src/engine';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
@@ -524,5 +531,49 @@ describe('proofing finds the exported panels exactly', () => {
         }
       }
     }
+  });
+});
+
+describe('putting proofed sheets in another order', () => {
+  it('normalises any order to a permutation', () => {
+    expect(sheetPermutation(undefined, 3)).toEqual([0, 1, 2]);
+    expect(sheetPermutation([2], 3)).toEqual([2, 0, 1]);
+    expect(sheetPermutation([2, 2, 9, -1, 1.5, 0], 3)).toEqual([2, 0, 1]);
+    expect(sheetPermutation([3, 1, 0, 2], 3)).toEqual([1, 0, 2]); // fewer sheets now
+    expect(inPdfOrder([0, 1, 2], 3)).toBe(true);
+    expect(inPdfOrder([1, 0], 3)).toBe(false);
+  });
+
+  it('moves one sheet and closes up the rest', () => {
+    expect(moveSheet(undefined, 4, 3, 0)).toEqual([3, 0, 1, 2]);
+    expect(moveSheet([3, 0, 1, 2], 4, 0, 3)).toEqual([0, 1, 2, 3]);
+    expect(moveSheet(undefined, 4, 1, 2)).toEqual([0, 2, 1, 3]);
+    expect(moveSheet(undefined, 4, 0, 9)).toEqual([0, 1, 2, 3]); // out of range: unchanged
+  });
+
+  it('reads each sheet from the part it was moved from, several per sheet too', () => {
+    const plan = buildPlan(recipe('saddle-stitch'), 16); // 4 sheets, two per printed sheet
+    const sheet: PdfPageInfo = {
+      rotate: 0,
+      crop: { x: 0, y: 0, w: 297 * MM, h: 210 * MM },
+      trim: { x: 0, y: 0, w: 297 * MM, h: 210 * MM },
+      hasTrim: false,
+      unit: 1,
+    };
+    const pages = [sheet, sheet, sheet, sheet];
+    const base = { ...DEFAULT_IMPOSED, gang: { across: 2, down: 1, order: 'stack' as const } };
+    const plain = proofLayout(pages, plan, base);
+    const sheetOrder = [3, 0, 2, 1];
+    const moved = proofLayout(pages, plan, { ...base, sheetOrder });
+    for (let i = 0; i < 4; i++) {
+      for (const side of ['front', 'back'] as const) {
+        for (const col of [0, 1]) {
+          expect(moved.region(i, side, col, 0)).toEqual(plain.region(sheetOrder[i]!, side, col, 0));
+        }
+      }
+      expect(moved.sourceOf(i)).toEqual(plain.sourceOf(sheetOrder[i]!));
+    }
+    // Cut and stack: part 3 (0-based) is the second printed sheet's right-hand part.
+    expect(moved.sourceOf(0)).toEqual({ part: 3, printed: 1, unit: 1 });
   });
 });

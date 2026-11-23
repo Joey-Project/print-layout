@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { MM } from '../pdf/geometry';
-import { physicalSize, type ImposedOptions } from '../pdf/imposed';
+import { inPdfOrder, physicalSize, sheetPermutation, type ImposedOptions } from '../pdf/imposed';
 import type { LoadedPdf, PdfArt } from './pdfArt';
 
 /** Open a PDF from disk: page info via pdf-lib, rendering via pdf.js (both loaded on demand). */
@@ -24,10 +24,13 @@ export function SourcePanel({
   onOpen,
   onClose,
   onImposed,
+  sheetCount,
 }: {
   pdf: LoadedPdf | null;
   art: PdfArt | null;
   imposed: ImposedOptions;
+  /** Recipe sheets being proofed (for the sheet order). */
+  sheetCount: number;
   onOpen: (pdf: LoadedPdf) => void;
   onClose: () => void;
   onImposed: (o: ImposedOptions) => void;
@@ -155,6 +158,11 @@ export function SourcePanel({
                 />
                 Printed sheets are in reverse order (last sheet first)
               </label>
+              <SheetOrderField
+                order={imposed.sheetOrder}
+                n={sheetCount}
+                onChange={(sheetOrder) => onImposed({ ...imposed, sheetOrder })}
+              />
               <label>
                 Each printed sheet holds
                 <select
@@ -304,5 +312,55 @@ export function SourcePanel({
       )}
       {error && <p className="error">{error}</p>}
     </section>
+  );
+}
+
+/**
+ * The sheet order as text: sheets numbered as they come in the PDF (each cut-apart part counts as
+ * one), in the order they are read. A partial list puts those first and the rest after, in order.
+ */
+function SheetOrderField({
+  order,
+  n,
+  onChange,
+}: {
+  order: number[] | undefined;
+  n: number;
+  onChange: (order: number[] | undefined) => void;
+}) {
+  const text = sheetPermutation(order, n)
+    .map((v) => v + 1)
+    .join(', ');
+  const commit = (value: string) => {
+    const parts = value.match(/\d+/g)?.map((v) => Number(v) - 1) ?? [];
+    const next = sheetPermutation(parts, n);
+    onChange(inPdfOrder(next, n) ? undefined : next);
+  };
+  return (
+    <div className="sheet-order">
+      <label>
+        Sheet order
+        <span className="row-inline">
+          <input
+            key={text}
+            type="text"
+            inputMode="numeric"
+            defaultValue={text}
+            aria-describedby="sheet-order-hint"
+            onBlur={(e) => commit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }}
+          />
+          <button type="button" disabled={inPdfOrder(order, n)} onClick={() => onChange(undefined)}>
+            Reset
+          </button>
+        </span>
+      </label>
+      <p id="sheet-order-hint" className="muted small">
+        Drag the sheets on the Sheets tab, or type them numbered in the PDF&apos;s own order: “3, 1,
+        2” reads its third sheet first.
+      </p>
+    </div>
   );
 }

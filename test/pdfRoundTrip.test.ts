@@ -528,4 +528,33 @@ describe('PDF export and de-imposition round trip', () => {
       Array.from({ length: 12 }, (_, i) => String(i + 1)),
     );
   });
+
+  it('proofs a PDF whose printed sheets are shuffled, once put back in order', async () => {
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 16); // 4 sheets
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: A5,
+      options: opts('home'),
+      baseName: 'test',
+    });
+    // Printed sheets in the order 3, 1, 4, 2 (pairs of pages: front, back).
+    const shuffled = [2, 0, 3, 1];
+    const src = await loadPdf(files[0]!.bytes);
+    const out = await PDFDocument.create();
+    const pages = shuffled.flatMap((s) => [2 * s, 2 * s + 1]);
+    for (const p of await out.copyPages(src, pages)) out.addPage(p);
+    const bytes = await out.save();
+    const inOrder = Array.from({ length: 16 }, (_, i) => String(i + 1));
+    const asIs = await visibleNumbers((await deimposePdf(bytes, plan, DEFAULT_IMPOSED, 't')).bytes);
+    expect(asIs.map((n) => n.join())).not.toEqual(inOrder);
+    // Sheet 1 is the PDF's 2nd, sheet 2 its 4th, sheet 3 its 1st, sheet 4 its 3rd.
+    const sheetOrder = [1, 3, 0, 2];
+    const fixed = await visibleNumbers(
+      (await deimposePdf(bytes, plan, { ...DEFAULT_IMPOSED, sheetOrder }, 't')).bytes,
+    );
+    expect(fixed.map((n) => n.join())).toEqual(inOrder);
+  });
 });

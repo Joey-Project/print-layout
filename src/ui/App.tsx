@@ -13,7 +13,13 @@ import {
 } from '../engine';
 import { isBuiltin, loadCustomRecipes, saveCustomRecipes } from './recipeStore';
 import { sectionPageSize } from '../pdf/geometry';
-import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../pdf/imposed';
+import {
+  DEFAULT_IMPOSED,
+  moveSheet,
+  proofLayout,
+  proofSheetRange,
+  type ImposedOptions,
+} from '../pdf/imposed';
 import { usePdfArt, type LoadedPdf } from './pdfArt';
 import { DEFAULT_PRINT, PrintView, type PrintSettings } from './PrintView';
 import { SourcePanel } from './SourcePanel';
@@ -29,7 +35,7 @@ import {
   type ViewerDebug,
   type ViewerState,
 } from './debugReport';
-import { PlanView } from './SheetView';
+import { PlanView, type SheetOrderControls } from './SheetView';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
 
@@ -135,6 +141,24 @@ export function App() {
   const plan = 'plan' in planResult ? planResult.plan : null;
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
   const pdfArt = usePdfArt(pdf, plan, imposed);
+  // Proofing: the sheets can be put in another order than the PDF's.
+  const sheetOrder = useMemo((): SheetOrderControls | null => {
+    if (pdf?.mode !== 'imposed' || !plan) return null;
+    const proof = proofLayout(pdf.info, plan, imposed);
+    const n = plan.sheets.length;
+    const several = proof.paper.gang.units > 1;
+    return {
+      source: (i) => {
+        const at = proof.sourceOf(i);
+        return `PDF sheet ${at.printed + 1}${several ? `, part ${at.unit + 1}` : ''}`;
+      },
+      moved: (i) => proof.sourceOf(i).part !== i,
+      move: (from, to) => {
+        logEvent('moveSheet', { from, to });
+        setImposed((o) => ({ ...o, sheetOrder: moveSheet(o.sheetOrder, n, from, to) }));
+      },
+    };
+  }, [pdf, plan, imposed]);
   // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
   const printGang = print.options.gang ?? NO_GANG;
   // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
@@ -367,11 +391,13 @@ export function App() {
           pdf={pdf}
           art={pdfArt}
           imposed={imposed}
+          sheetCount={plan?.sheets.length ?? 0}
           onOpen={(p) => {
             logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
             setPdf(p);
-            // A new imposed PDF: every position holds a sheet until told otherwise.
-            if (imposed.pages !== undefined) setImposed({ ...imposed, pages: undefined });
+            // A new imposed PDF: every position holds a sheet, in order, until told otherwise.
+            if (imposed.pages !== undefined || imposed.sheetOrder !== undefined)
+              setImposed({ ...imposed, pages: undefined, sheetOrder: undefined });
             setView(p.mode === 'imposed' ? '2d' : view);
           }}
           onClose={() => {
@@ -461,6 +487,7 @@ export function App() {
                   onHover={setHovered}
                   pdfArt={pdfArt}
                   showReading={pdf?.mode === 'imposed'}
+                  order={sheetOrder}
                 />
               ) : view === 'print' ? (
                 <PrintView
