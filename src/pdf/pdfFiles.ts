@@ -49,7 +49,7 @@ import {
   type PdfPageInfo,
   slotsByPosition,
 } from './imposed';
-import { pageSource } from './pageOrder';
+import { pageSource, type PageEntry } from './pageOrder';
 
 const asRect = (b: { x: number; y: number; width: number; height: number }): Rect => ({
   x: b.x,
@@ -248,8 +248,8 @@ async function drawSide(
   extras: {
     slug: { font: PDFFont; text: string } | null;
     registration: PDFRef;
-    /** Book page (1-based) → source PDF page (1-based). */
-    source: (page: number) => number;
+    /** Book page (1-based) → source PDF page (1-based), null for a blank page. */
+    source: (page: number) => number | null;
   },
 ) {
   const { slug, registration } = extras;
@@ -257,7 +257,7 @@ async function drawSide(
   for (const placed of layout.place(paper, side)) {
     if (placed.slot.page === null) continue;
     const n = extras.source(placed.slot.page);
-    if (n < 1 || n > info.length) continue;
+    if (n === null || n < 1 || n > info.length) continue; // a blank page: nothing to draw
     const srcPage = src.getPage(n - 1);
     if (!hasContents(srcPage)) continue; // a truly empty page: nothing to draw
     const p = placePage(
@@ -356,9 +356,10 @@ export interface ExportInput {
   onlySheet?: number;
   /**
    * The source's pages in another order: book page i + 1 is the source's page `pageOrder[i]`
-   * (0-based; normalised to a permutation of its pages). Unset: the source's own order.
+   * (0-based), or a blank page for `null` (normalised by `pageEntries`: every source page once).
+   * Unset: the source's own order. The plan counts the blanks as pages.
    */
-  pageOrder?: number[];
+  pageOrder?: PageEntry[];
 }
 
 /** Impose the source onto print-ready sheets. */

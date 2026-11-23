@@ -16,6 +16,9 @@ import {
   PDFRawStream,
 } from 'pdf-lib';
 import { deimposePdf, exportImposed, loadPdf, pageInfo, placeholderPdf } from '../src/pdf/pdfFiles';
+import { imagesToPdf } from '../src/pdf/images';
+import { bookLength, type PageEntry } from '../src/pdf/pageOrder';
+import { png } from './helpers/png';
 
 const recipe = (id: string): Recipe => builtinRecipes.find((r) => r.id === id)!;
 const A5 = { w: 148 * MM, h: 210 * MM };
@@ -628,5 +631,118 @@ describe('PDF export and de-imposition round trip', () => {
     expect(want.filter(Boolean)).toHaveLength(10);
     expect(await reading()).not.toEqual(want);
     expect(await reading(pageOrder)).toEqual(want);
+  });
+
+  describe('a reading-order PDF with blank pages inserted', () => {
+    // PDF pages 1–6 (0-based 0–5), shuffled, with three blanks: a blank inside the cover, one
+    // mid-book and one before the last page.
+    const order: PageEntry[] = [null, 2, 0, 1, null, 3, 4, null, 5];
+    // Book page p (1-based) → the number the dummy prints there, or '' for a blank.
+    const shows = (p: number | null) => {
+      const e = p === null ? null : (order[p - 1] ?? null);
+      return e === null ? '' : String(e + 1);
+    };
+
+    it.each(['home', 'manual', 'shop'] as const)('%s preset: every panel', async (preset) => {
+      const r = recipe('saddle-stitch');
+      const source = await (await placeholderPdf(6, A5)).save();
+      expect(bookLength(order, 6)).toBe(9);
+      const plan = buildPlan(r, bookLength(order, 6));
+      expect(plan.slotCount).toBe(12); // three more blanks from the plan
+      const options = opts(preset);
+      const { files, layout } = await exportImposed({
+        plan,
+        recipe: r,
+        source,
+        dummyPageSize: A5,
+        options,
+        baseName: 'test',
+        pageOrder: order,
+      });
+
+      // Every printed side, in sheet order: one file (front, back…) or fronts and backs.
+      const sides: string[][] = [];
+      if (files.length === 1) sides.push(...(await visibleNumbers(files[0]!.bytes)));
+      else {
+        const fronts = await visibleNumbers(files[0]!.bytes);
+        const backs = await visibleNumbers(files[1]!.bytes);
+        if (options.reverseBacks) backs.reverse();
+        fronts.forEach((f, i) => sides.push(f, backs[i]!));
+      }
+      expect(sides).toHaveLength(plan.sheets.length * 2);
+      plan.sheets.forEach((s, i) => {
+        for (const side of ['front', 'back'] as const) {
+          const want = s[side]
+            .map((x) => ({ x, n: shows(x.page) }))
+            .filter(({ n }) => n !== '')
+            .map(
+              ({ x, n }) =>
+                `${n}${(x.rotation + (side === 'back' && layout.backRotated ? 180 : 0)) % 360 ? '↻' : ''}`,
+            )
+            .sort();
+          expect(
+            sides[i * 2 + (side === 'back' ? 1 : 0)]!.sort(),
+            `sheet ${i + 1} ${side}`,
+          ).toEqual(want);
+        }
+      });
+
+      // Cut back up (one-file presets): every reading position, blanks empty.
+      if (files.length === 1) {
+        const back = await deimposePdf(files[0]!.bytes, plan, DEFAULT_IMPOSED, 't');
+        const reading = (await visibleNumbers(back.bytes)).map((n) => n.join());
+        const bySlot = new Map(
+          plan.sheets.flatMap((s) => [...s.front, ...s.back]).map((s) => [s.position, s.page]),
+        );
+        expect(reading).toEqual(
+          Array.from({ length: plan.slotCount }, (_, i) => shows(bySlot.get(i + 1) ?? null)),
+        );
+        expect(reading.filter(Boolean)).toHaveLength(6);
+      }
+    });
+
+    it('imposes images as pages, at full resolution, blanks left empty', async () => {
+      const sizes = [
+        { w: 300, h: 200 },
+        { w: 120, h: 480 },
+        { w: 64, h: 64 },
+      ];
+      const source = await imagesToPdf(
+        sizes.map((s, i) => ({ name: `${i + 1}.png`, type: 'png' as const, bytes: png(s.w, s.h) })),
+        { size: { kind: 'preset', id: 'a5', orientation: 'portrait' }, fit: 'fill' },
+      );
+      const r = recipe('saddle-stitch');
+      const pageOrder: PageEntry[] = [0, null, 1, 2];
+      const plan = buildPlan(r, bookLength(pageOrder, 3));
+      const { files } = await exportImposed({
+        plan,
+        recipe: r,
+        source,
+        dummyPageSize: A5,
+        options: opts('home'),
+        baseName: 'test',
+        pageOrder,
+      });
+      const doc = await loadPdf(files[0]!.bytes);
+      // Every image in the export, as embedded: none downsampled, none missing.
+      const images = doc.context
+        .enumerateIndirectObjects()
+        .map(([, o]) => o)
+        .filter(
+          (o): o is PDFRawStream =>
+            o instanceof PDFRawStream && o.dict.get(PDFName.of('Subtype')) === PDFName.of('Image'),
+        )
+        .map((o) => {
+          const v = (k: string) => (o.dict.get(PDFName.of(k)) as PDFNumber).asNumber();
+          return `${v('Width')}x${v('Height')}`;
+        });
+      expect(new Set(images)).toEqual(new Set(sizes.map((s) => `${s.w}x${s.h}`)));
+      // Each panel holding an image draws one page; the blank and the plan's padding draw none.
+      const drawn = doc.getPages().map((p) => {
+        const xo = p.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict);
+        return xo ? xo.keys().length : 0;
+      });
+      expect(drawn.reduce((a, b) => a + b, 0)).toBe(3);
+    });
   });
 });
