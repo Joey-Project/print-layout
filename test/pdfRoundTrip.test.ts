@@ -1,6 +1,11 @@
 import { buildPlan, builtinRecipes, type Recipe } from '../src/engine';
 import { MM, PRINT_PRESETS, type PrintOptions } from '../src/pdf/geometry';
-import { DEFAULT_IMPOSED, proofSheetRange, type ImposedOptions } from '../src/pdf/imposed';
+import {
+  DEFAULT_IMPOSED,
+  proofLayout,
+  proofSheetRange,
+  type ImposedOptions,
+} from '../src/pdf/imposed';
 import {
   decodePDFRawStream,
   PDFArray,
@@ -556,5 +561,38 @@ describe('PDF export and de-imposition round trip', () => {
       (await deimposePdf(bytes, plan, { ...DEFAULT_IMPOSED, sheetOrder }, 't')).bytes,
     );
     expect(fixed.map((n) => n.join())).toEqual(inOrder);
+  });
+  it('reads a shuffled part from an empty position when the book has fewer sheets', async () => {
+    // 20 pages two per sheet: five recipe sheets on three printed sheets, the last position empty.
+    const r = recipe('saddle-stitch');
+    const plan = buildPlan(r, 20);
+    const options = opts('home', { gang: { across: 2, down: 1, order: 'stack' } });
+    const { files } = await exportImposed({
+      plan,
+      recipe: r,
+      source: null,
+      dummyPageSize: { w: 105 * MM, h: 148 * MM },
+      options,
+      baseName: 'test',
+    });
+    // Printed sheets in the order 2, 3, 1: sheet 4's part now sits in the PDF's last position.
+    const src = await loadPdf(files[0]!.bytes);
+    const out = await PDFDocument.create();
+    for (const p of await out.copyPages(src, [2, 3, 4, 5, 0, 1])) out.addPage(p);
+    const bytes = await out.save();
+    const proof = {
+      ...DEFAULT_IMPOSED,
+      gang: options.gang,
+      gutter: options.gutter,
+      pages: 20,
+      sheetOrder: [2, 0, 1, 5, 3],
+    };
+    const layout = proofLayout(pageInfo(await loadPdf(bytes)), plan, proof);
+    expect(layout.positions).toBe(6);
+    expect(layout.sourceOf(3)).toEqual({ part: 5, printed: 2, unit: 1 });
+    const reading = await visibleNumbers((await deimposePdf(bytes, plan, proof, 't')).bytes);
+    expect(reading.map((n) => n.join())).toEqual(
+      Array.from({ length: 20 }, (_, i) => String(i + 1)),
+    );
   });
 });

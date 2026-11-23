@@ -24,13 +24,14 @@ export function SourcePanel({
   onOpen,
   onClose,
   onImposed,
-  sheetCount,
+  sheetPositions,
 }: {
   pdf: LoadedPdf | null;
   art: PdfArt | null;
   imposed: ImposedOptions;
   /** Recipe sheets being proofed (for the sheet order). */
-  sheetCount: number;
+  /** Positions the sheet order picks from (every part on the printed sheets, empty ones too). */
+  sheetPositions: number;
   onOpen: (pdf: LoadedPdf) => void;
   onClose: () => void;
   onImposed: (o: ImposedOptions) => void;
@@ -160,7 +161,7 @@ export function SourcePanel({
               </label>
               <SheetOrderField
                 order={imposed.sheetOrder}
-                n={sheetCount}
+                n={sheetPositions}
                 onChange={(sheetOrder) => onImposed({ ...imposed, sheetOrder })}
               />
               <label>

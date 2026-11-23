@@ -142,10 +142,13 @@ export function App() {
   const blanks = plan ? plan.slotCount - plan.pageCount : 0;
   const pdfArt = usePdfArt(pdf, plan, imposed);
   // Proofing: the sheets can be put in another order than the PDF's.
+  const proof = useMemo(
+    () => (pdf?.mode === 'imposed' && plan ? proofLayout(pdf.info, plan, imposed) : null),
+    [pdf, plan, imposed],
+  );
   const sheetOrder = useMemo((): SheetOrderControls | null => {
-    if (pdf?.mode !== 'imposed' || !plan) return null;
-    const proof = proofLayout(pdf.info, plan, imposed);
-    const n = plan.sheets.length;
+    if (!proof) return null;
+    const n = proof.positions;
     const several = proof.paper.gang.units > 1;
     return {
       source: (i) => {
@@ -158,7 +161,7 @@ export function App() {
         setImposed((o) => ({ ...o, sheetOrder: moveSheet(o.sheetOrder, n, from, to) }));
       },
     };
-  }, [pdf, plan, imposed]);
+  }, [proof]);
   // The 3D model starts from the printed sheets as set up on the Print tab (several per sheet).
   const printGang = print.options.gang ?? NO_GANG;
   // A sheet divided into sections fixes the page shape (e.g. A4 in thirds: long, narrow pages).
@@ -391,7 +394,7 @@ export function App() {
           pdf={pdf}
           art={pdfArt}
           imposed={imposed}
-          sheetCount={plan?.sheets.length ?? 0}
+          sheetPositions={proof?.positions ?? 0}
           onOpen={(p) => {
             logEvent('openPdf', { name: p.name, mode: p.mode, pages: p.info.length });
             setPdf(p);

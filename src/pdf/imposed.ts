@@ -43,8 +43,8 @@ export interface ImposedOptions {
   pages?: number;
   /**
    * Where each recipe sheet is in the PDF: recipe sheet i is read from part `sheetOrder[i]`, parts
-   * counted in the PDF's own order (with several per sheet, each cut-apart part is one). Unset or
-   * partial: the rest in order.
+   * counted in the PDF's own order (with several per sheet, each cut-apart part is one; empty
+   * positions count too, so any part can be read). Unset or partial: the rest in order.
    */
   sheetOrder?: number[];
   /** The printed sheet is divided into equal sections, one page each (blank ones cut off). */
@@ -283,6 +283,11 @@ export interface ProofLayout {
   printed: number;
   /** Recipe sheets those make (what the plan should be built for). */
   sheets: number;
+  /**
+   * Parts `sheetOrder` picks from: every position on the printed sheets, including empty ones at
+   * the end, so a shuffled PDF's last real part can still be read when the book has fewer sheets.
+   */
+  positions: number;
   region(sheet: number, side: 'front' | 'back', col: number, row: number): ProofRegion | null;
   /** Where recipe sheet `sheet` is read from: its part, the printed sheet and the position on it. */
   sourceOf(sheet: number): { part: number; printed: number; unit: number };
@@ -317,7 +322,8 @@ export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions):
   const paper = paperPlan(plan.sheets.length, plan.grid, o.gang ?? NO_GANG, o.sections ?? null);
   const sides = sideMap(info.length, o.order);
   const { across, down } = paper.gang.gang;
-  const order = sheetPermutation(o.sheetOrder, plan.sheets.length);
+  const positions = Math.max(plan.sheets.length, proofSheetCount(info.length, plan.grid, o));
+  const order = sheetPermutation(o.sheetOrder, positions);
   function sourceOf(sheet: number) {
     const part = order[sheet] ?? sheet;
     const at = paper.gang.placeOf(part);
@@ -331,6 +337,7 @@ export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions):
     paper,
     printed: sides.sheetCount,
     sheets: proofSheetCount(info.length, plan.grid, o),
+    positions,
     sourceOf,
     region(sheet, side, col, row) {
       const at = paper.gang.placeOf(order[sheet] ?? sheet);

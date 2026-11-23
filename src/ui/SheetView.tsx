@@ -107,13 +107,18 @@ export function PlanView({
   const [dragging, setDragging] = useState<number | null>(null);
   const [pointed, setPointed] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
-  const active = dragging ?? pointed;
-  const activePositions = new Set(
-    active === null
-      ? []
-      : [...plan.sheets[active]!.front, ...plan.sheets[active]!.back].map((s) => s.position),
-  );
   const n = plan.sheets.length;
+  // A plan with fewer sheets (changed from the keyboard while pointing) drops stale state.
+  useEffect(() => {
+    setDragging(null);
+    setPointed(null);
+    setDropAt(null);
+  }, [n]);
+  const active = dragging ?? pointed;
+  const activeSheet = active === null ? undefined : plan.sheets[active];
+  const activePositions = new Set(
+    activeSheet ? [...activeSheet.front, ...activeSheet.back].map((s) => s.position) : [],
+  );
   const endDrag = () => {
     setDragging(null);
     setDropAt(null);
