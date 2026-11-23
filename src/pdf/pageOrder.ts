@@ -3,28 +3,17 @@
  * is the PDF page (0-based) read as book page i + 1. Every lookup goes through `pageSource`, so the
  * 2D sheets, the 3D model and the export agree.
  */
+import { inPdfOrder, sheetPermutation } from './imposed';
 
 /**
  * `order` as a permutation of 0 … n−1: valid entries in their order (repeats dropped), then the
- * missing ones ascending.
+ * missing ones ascending (the same rule as the proofed sheet order).
  */
-export function pagePermutation(order: readonly number[] | undefined, n: number): number[] {
-  const seen = new Set<number>();
-  const out: number[] = [];
-  for (const v of order ?? []) {
-    if (Number.isInteger(v) && v >= 0 && v < n && !seen.has(v)) {
-      seen.add(v);
-      out.push(v);
-    }
-  }
-  for (let i = 0; i < n; i++) if (!seen.has(i)) out.push(i);
-  return out;
-}
+export const pagePermutation: (order: readonly number[] | undefined, n: number) => number[] =
+  sheetPermutation;
 
 /** Whether `order` is the PDF's own order (nothing moved). */
-export function inPageOrder(order: readonly number[] | undefined, n: number) {
-  return pagePermutation(order, n).every((v, i) => v === i);
-}
+export const inPageOrder: (order: readonly number[] | undefined, n: number) => boolean = inPdfOrder;
 
 /**
  * Book page (1-based) → the PDF page (1-based) that supplies it, for a PDF of `n` pages. Pages past
