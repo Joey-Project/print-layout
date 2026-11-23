@@ -41,6 +41,12 @@ export interface ImposedOptions {
    * an empty position from a blank sheet). Unset: every position holds a sheet.
    */
   pages?: number;
+  /**
+   * Where each recipe sheet is in the PDF: recipe sheet i is read from part `sheetOrder[i]`, parts
+   * counted in the PDF's own order (with several per sheet, each cut-apart part is one; empty
+   * positions count too, so any part can be read). Unset or partial: the rest in order.
+   */
+  sheetOrder?: number[];
   /** The printed sheet is divided into equal sections, one page each (blank ones cut off). */
   sections?: Sections | null;
 }
@@ -235,13 +241,56 @@ export interface ProofRegion {
   turn: Rotation;
 }
 
+/**
+ * `order` as a permutation of 0 … n−1: valid entries in their order (repeats dropped), then the
+ * missing ones ascending.
+ */
+export function sheetPermutation(order: readonly number[] | undefined, n: number): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const v of order ?? []) {
+    if (Number.isInteger(v) && v >= 0 && v < n && !seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  for (let i = 0; i < n; i++) if (!seen.has(i)) out.push(i);
+  return out;
+}
+
+/** The order after moving the sheet at `from` to `to` (the others close up). */
+export function moveSheet(
+  order: readonly number[] | undefined,
+  n: number,
+  from: number,
+  to: number,
+): number[] {
+  const out = sheetPermutation(order, n);
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return out;
+  const [moved] = out.splice(from, 1);
+  out.splice(to, 0, moved!);
+  return out;
+}
+
+/** Whether `order` is the PDF's own order (nothing moved). */
+export function inPdfOrder(order: readonly number[] | undefined, n: number) {
+  return sheetPermutation(order, n).every((v, i) => v === i);
+}
+
 export interface ProofLayout {
   paper: PaperPlan;
   /** Printed sheets the PDF holds. */
   printed: number;
   /** Recipe sheets those make (what the plan should be built for). */
   sheets: number;
+  /**
+   * Parts `sheetOrder` picks from: every position on the printed sheets, including empty ones at
+   * the end, so a shuffled PDF's last real part can still be read when the book has fewer sheets.
+   */
+  positions: number;
   region(sheet: number, side: 'front' | 'back', col: number, row: number): ProofRegion | null;
+  /** Where recipe sheet `sheet` is read from: its part, the printed sheet and the position on it. */
+  sourceOf(sheet: number): { part: number; printed: number; unit: number };
 }
 
 /** Recipe sheets an imposed PDF of `pdfPages` pages holds, for these options. */
@@ -273,12 +322,25 @@ export function proofLayout(info: PdfPageInfo[], plan: Plan, o: ImposedOptions):
   const paper = paperPlan(plan.sheets.length, plan.grid, o.gang ?? NO_GANG, o.sections ?? null);
   const sides = sideMap(info.length, o.order);
   const { across, down } = paper.gang.gang;
+  const positions = Math.max(plan.sheets.length, proofSheetCount(info.length, plan.grid, o));
+  const order = sheetPermutation(o.sheetOrder, positions);
+  function sourceOf(sheet: number) {
+    const part = order[sheet] ?? sheet;
+    const at = paper.gang.placeOf(part);
+    return {
+      part,
+      printed: o.reversed ? sides.sheetCount - 1 - at.paper : at.paper,
+      unit: at.row * across + at.col,
+    };
+  }
   return {
     paper,
     printed: sides.sheetCount,
     sheets: proofSheetCount(info.length, plan.grid, o),
+    positions,
+    sourceOf,
     region(sheet, side, col, row) {
-      const at = paper.gang.placeOf(sheet);
+      const at = paper.gang.placeOf(order[sheet] ?? sheet);
       const printedSheet = o.reversed ? sides.sheetCount - 1 - at.paper : at.paper;
       if (printedSheet < 0) return null;
       const index = sides.pageOf(printedSheet, side);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Grid, Plan, Slot } from '../engine';
 import type { PdfArt } from './pdfArt';
 
@@ -75,12 +75,23 @@ function SideView({ title, hint, grid, slots, hovered, onHover, art }: SideProps
   );
 }
 
+/** Reordering the sheets of an imposed PDF being proofed. */
+export interface SheetOrderControls {
+  /** Where sheet i's artwork comes from, e.g. "PDF sheet 3, part 2". */
+  source(sheet: number): string;
+  /** Whether sheet i is read from somewhere other than its own place in the PDF. */
+  moved(sheet: number): boolean;
+  /** Move the artwork of the sheet at `from` to `to` (the others close up). */
+  move(from: number, to: number): void;
+}
+
 export function PlanView({
   plan,
   hovered,
   onHover,
   pdfArt = null,
   showReading = false,
+  order = null,
 }: {
   plan: Plan;
   hovered: number | null;
@@ -89,7 +100,29 @@ export function PlanView({
   pdfArt?: PdfArt | null;
   /** Show the imposed PDF cut back into reading order (proof mode). */
   showReading?: boolean;
+  /** Let the sheets be dragged into another order (proof mode). */
+  order?: SheetOrderControls | null;
 }) {
+  // The sheet being dragged (or whose header is pointed at), and where it would drop.
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [pointed, setPointed] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const n = plan.sheets.length;
+  // A plan with fewer sheets (changed from the keyboard while pointing) drops stale state.
+  useEffect(() => {
+    setDragging(null);
+    setPointed(null);
+    setDropAt(null);
+  }, [n]);
+  const active = dragging ?? pointed;
+  const activeSheet = active === null ? undefined : plan.sheets[active];
+  const activePositions = new Set(
+    activeSheet ? [...activeSheet.front, ...activeSheet.back].map((s) => s.position) : [],
+  );
+  const endDrag = () => {
+    setDragging(null);
+    setDropAt(null);
+  };
   const style = pdfArt
     ? ({
         '--panel-h': `calc(var(--panel-w) * ${pdfArt.aspect})`,
@@ -113,7 +146,11 @@ export function PlanView({
               return (
                 <figure
                   key={i}
-                  className={hovered === i + 1 ? 'hot' : ''}
+                  className={
+                    [hovered === i + 1 && 'hot', activePositions.has(i + 1) && 'group']
+                      .filter(Boolean)
+                      .join(' ') || undefined
+                  }
                   onMouseEnter={() => onHover(i + 1)}
                   onMouseLeave={() => onHover(null)}
                 >
@@ -126,8 +163,73 @@ export function PlanView({
         </section>
       )}
       {plan.sheets.map((sheet, i) => (
-        <section key={i} className="sheet-card">
-          <h3>Sheet {i + 1}</h3>
+        <section
+          key={i}
+          className={[
+            'sheet-card',
+            order && 'movable',
+            dragging === i && 'dragging',
+            dropAt === i && dragging !== null && dragging !== i && 'drop-here',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          draggable={order !== null}
+          onDragStart={(e) => {
+            if (!order) return;
+            setDragging(i);
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(i));
+          }}
+          onDragOver={(e) => {
+            if (dragging === null) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (dropAt !== i) setDropAt(i);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (order && dragging !== null) order.move(dragging, i);
+            endDrag();
+          }}
+          onDragEnd={endDrag}
+        >
+          {order ? (
+            <h3
+              className="sheet-head"
+              onMouseEnter={() => setPointed(i)}
+              onMouseLeave={() => setPointed(null)}
+            >
+              <span className="grip" aria-hidden="true" title="Drag to reorder">
+                ⠿
+              </span>
+              Sheet {i + 1}
+              <span className={`from${order.moved(i) ? ' moved' : ''}`}>
+                from {order.source(i)}
+              </span>
+              <span className="move">
+                <button
+                  type="button"
+                  disabled={i === 0}
+                  aria-label={`Move sheet ${i + 1} earlier`}
+                  title="Earlier"
+                  onClick={() => order.move(i, i - 1)}
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  disabled={i === n - 1}
+                  aria-label={`Move sheet ${i + 1} later`}
+                  title="Later"
+                  onClick={() => order.move(i, i + 1)}
+                >
+                  →
+                </button>
+              </span>
+            </h3>
+          ) : (
+            <h3>Sheet {i + 1}</h3>
+          )}
           <div className="sides">
             <SideView
               title="Front"

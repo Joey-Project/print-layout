@@ -201,6 +201,46 @@ main {
   font-size: 14px;
 }
 
+/* Proofing: sheets can be dragged (or moved with the arrows) into another order. */
+.sheet-card.movable {
+  cursor: grab;
+}
+.sheet-card.dragging {
+  opacity: 0.45;
+}
+.sheet-card.drop-here {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sheet-head .grip {
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+.sheet-head .from {
+  font-weight: normal;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sheet-head .from.moved {
+  color: var(--accent);
+}
+.sheet-head .move {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.sheet-head .move button {
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
 .sides {
   display: flex;
   flex-wrap: wrap;
@@ -414,6 +454,12 @@ main {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* Pages of the sheet being dragged (or pointed at) in the Sheets list. */
+.reading-pages figure.group {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 4px;
+}
 .reading-pages .art {
   display: block;
   width: 72px;
@@ -580,5 +626,15 @@ label.inline {
 .row3 input,
 .row3 select {
   width: 100%;
+  min-width: 0;
+}
+
+/* Proofing: the sheet order typed in, with a reset. */
+.sheet-order .row-inline {
+  display: flex;
+  gap: 6px;
+}
+.sheet-order .row-inline input {
+  flex: 1;
   min-width: 0;
 }
