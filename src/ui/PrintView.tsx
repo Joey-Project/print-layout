@@ -103,12 +103,13 @@ export function PrintView({
   const [preview, setPreview] = useState<Uint8Array | null>(null);
 
   const source = pdf?.mode === 'reading' ? pdf : null;
-  const pageSize = useMemo(() => {
+  /** Finished page size for these options: a sheet divided into sections sizes the dummy's. */
+  const pageSizeFor = (opts: PrintOptions) => {
     const first = source?.info[0];
     if (first) return physicalSize(first, first.trim);
-    // A sheet divided into sections sizes the dummy's pages itself.
-    return sectionPageSize(o, plan.grid) ?? dummySize(settings.dummyPage);
-  }, [source, settings.dummyPage, o, plan.grid]);
+    return sectionPageSize(opts, plan.grid) ?? dummySize(settings.dummyPage);
+  };
+  const pageSize = useMemo(() => pageSizeFor(o), [source, settings.dummyPage, o, plan.grid]);
   const layout = useMemo(() => layoutSheets(plan, pageSize, o), [plan, pageSize, o]);
   const gang = o.gang ?? NO_GANG;
   const units = layout.gang.units;
@@ -125,10 +126,12 @@ export function PrintView({
    */
   const minFillScale = o.scaling === 'actual' ? 1 : 0.9;
   const bestGang = (opts: PrintOptions) => {
+    // The page size these options print at (turning sections off changes the dummy's).
+    const size = pageSizeFor(opts);
     let best = { across: 1, down: 1, scale: -1 };
     for (let across = 1; across <= 8; across++) {
       for (let down = 1; down <= 8; down++) {
-        const l = layoutSheets(plan, pageSize, {
+        const l = layoutSheets(plan, size, {
           ...opts,
           scaling: 'fit',
           gang: { ...gang, across, down },
@@ -154,11 +157,12 @@ export function PrintView({
     if (o.sheet.kind !== 'fit') {
       panels = 1;
       for (let k = cols - 1; k >= 1; k--) {
-        const l = layoutSheets(plan, pageSize, {
-          ...o,
+        // Joining turns sections off, so the page is measured as it will print.
+        const opts: PrintOptions = { ...o, sections: null, join: { panels: k, tab } };
+        const l = layoutSheets(plan, pageSizeFor(opts), {
+          ...opts,
           scaling: 'fit',
           gang: NO_GANG,
-          join: { panels: k, tab },
         });
         if (l.scale >= minFillScale - 1e-6) {
           panels = k;

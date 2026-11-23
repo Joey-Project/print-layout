@@ -1,4 +1,5 @@
 import {
+  accordion,
   buildPlan,
   builtinRecipes,
   foldAll,
@@ -105,7 +106,9 @@ describe('sequence recipes', () => {
 });
 
 describe('every built-in recipe', () => {
-  it.each(builtinRecipes.map((r) => [r.id, r] as const))('%s is valid and complete', (_, r) => {
+  // Built-ins, and accordions of other lengths (their panel count is set beside the recipe).
+  const recipes = [...builtinRecipes, ...[2, 6, 13, 48].map(accordion)];
+  it.each(recipes.map((r) => [r.id, r] as const))('%s is valid and complete', (_, r) => {
     expect(recipeProblems(r)).toEqual([]);
     for (const pages of [1, 5, 17, 40]) {
       const plan = buildPlan(r, pages);

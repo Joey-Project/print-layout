@@ -25,9 +25,9 @@ describe('accordions of any length', () => {
     expect(isAccordion(accordion(4))).toBe(true);
     expect(isAccordion(accordion(13))).toBe(true);
     expect(isAccordion({ ...accordion(5), grid: { cols: 6, rows: 1 } })).toBe(false);
-    expect(builtinRecipes.filter(isAccordion).map((r) => r.id)).toEqual([
-      'accordion-4',
-      'accordion-6',
+    // One built-in: its panel count is set beside it.
+    expect(builtinRecipes.filter(isAccordion).map((r) => [r.id, r.name])).toEqual([
+      ['accordion-4', 'Accordion'],
     ]);
   });
 });
