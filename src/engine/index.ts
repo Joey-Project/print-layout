@@ -3,7 +3,9 @@ export { applyFold, foldAll, foldedRect, initialStack, packetBounds } from './fo
 export type { Facet, Rect } from './fold';
 export { buildPlan, defaultSequence, pagesPerSheet, positionToPage, readingFaces } from './plan';
 export type { PlacedFace } from './plan';
-export { builtinRecipes, accordion, concertinaFolds } from './recipes';
+export { builtinRecipes, accordion, concertinaFolds, isAccordion } from './recipes';
 export { parseRecipe, recipeProblems } from './validate';
 export { backUnitColumn, gangPlan, NO_GANG, paperPlan } from './gang';
 export type { CellRect, Gang, GangPlan, PaperLayout, PaperPlan, Sections, UnitPlace } from './gang';
+export { piecePanels, pieceName, splitStrip } from './join';
+export type { Piece, SplitPlan } from './join';

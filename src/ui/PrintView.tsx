@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NO_GANG, type Gang, type Plan, type Recipe } from '../engine';
+import { NO_GANG, type Gang, type Piece, type Plan, type Recipe } from '../engine';
 import {
+  activeJoin,
   layoutSheets,
   sectionPageSize,
   MM,
@@ -123,12 +124,12 @@ export function PrintView({
    * inside a home printer's margins).
    */
   const minFillScale = o.scaling === 'actual' ? 1 : 0.9;
-  const fillSheet = () => {
+  const bestGang = (opts: PrintOptions) => {
     let best = { across: 1, down: 1, scale: -1 };
     for (let across = 1; across <= 8; across++) {
       for (let down = 1; down <= 8; down++) {
         const l = layoutSheets(plan, pageSize, {
-          ...o,
+          ...opts,
           scaling: 'fit',
           gang: { ...gang, across, down },
         });
@@ -139,7 +140,34 @@ export function PrintView({
         if (better) best = { across, down, scale: l.scale };
       }
     }
-    setGang({ across: best.across, down: best.down });
+    return { ...gang, across: best.across, down: best.down };
+  };
+  const fillSheet = () => setGang(bestGang(o));
+  // A strip in pieces glued end to end (a long accordion).
+  const cols = plan.grid.cols;
+  const join = activeJoin(o, plan.grid);
+  const pieces = layout.pieces;
+  const tabMm = o.join?.tab ?? 8;
+  /** The longest pieces that fit the sheet, then as many of them per sheet as fit. */
+  const fitPieces = (tab: number) => {
+    let panels = Math.min(cols - 1, 3);
+    if (o.sheet.kind !== 'fit') {
+      panels = 1;
+      for (let k = cols - 1; k >= 1; k--) {
+        const l = layoutSheets(plan, pageSize, {
+          ...o,
+          scaling: 'fit',
+          gang: NO_GANG,
+          join: { panels: k, tab },
+        });
+        if (l.scale >= minFillScale - 1e-6) {
+          panels = k;
+          break;
+        }
+      }
+    }
+    const next = { ...o, sections: null, join: { panels, tab } };
+    set({ sections: null, join: next.join, gang: o.sheet.kind !== 'fit' ? bestGang(next) : gang });
   };
   // Printed (physical) sheets: fewer than the recipe's sheets when several are ganged on one.
   const sheetCount = layout.gang.papers;
@@ -437,9 +465,79 @@ export function PrintView({
         )}
       </div>
 
+      {cols > 1 && (
+        <fieldset className="gang">
+          <legend>Long strip</legend>
+          <label className="check wide">
+            <input
+              type="checkbox"
+              checked={Boolean(join)}
+              onChange={(e) => (e.target.checked ? fitPieces(tabMm) : set({ join: null }))}
+            />
+            Print the strip in pieces and glue them end to end (for strips longer than the sheet)
+          </label>
+          {join && (
+            <>
+              <label>
+                Panels per piece
+                <input
+                  type="number"
+                  min={1}
+                  max={cols - 1}
+                  value={Math.floor(join.panels)}
+                  onChange={(e) =>
+                    set({
+                      join: {
+                        ...join,
+                        panels: Math.min(
+                          cols - 1,
+                          Math.max(1, Math.floor(Number(e.target.value)) || 1),
+                        ),
+                      },
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Glue tab (mm)
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  step={1}
+                  value={join.tab}
+                  onChange={(e) =>
+                    set({
+                      join: {
+                        ...join,
+                        tab: Math.min(30, Math.max(0, Number(e.target.value) || 0)),
+                      },
+                    })
+                  }
+                />
+              </label>
+              <button
+                onClick={() => fitPieces(join.tab)}
+                title="The most panels per piece that fit the sheet, then as many pieces per sheet as fit"
+              >
+                Fit the sheet
+              </button>
+              {pieces && (
+                <p className="muted small wide">
+                  {pieceSummary(pieces, plan.sheets.length)}{' '}
+                  {join.tab > 0
+                    ? `After cutting, glue each piece's tinted tab under the next piece's first panel, its edge on the tab's fold line; the strip then folds as one.`
+                    : 'After cutting, butt the pieces together and tape the joins on the back; the strip then folds as one.'}
+                </p>
+              )}
+            </>
+          )}
+        </fieldset>
+      )}
+
       <fieldset className="gang">
         <legend>Several per sheet</legend>
-        {o.sheet.kind !== 'fit' && (
+        {o.sheet.kind !== 'fit' && !join && (
           <label className="check wide">
             <input
               type="checkbox"
@@ -580,18 +678,20 @@ export function PrintView({
           <p>
             {gang.order === 'stack' ? (
               <>
-                The {plan.sheets.length} folded sheets are printed <strong>{units} per side</strong>{' '}
+                The {pieces ? pieces.length : plan.sheets.length}{' '}
+                {pieces ? 'pieces' : 'folded sheets'} are printed <strong>{units} per side</strong>{' '}
                 on {sheetCount} sheet{sheetCount === 1 ? '' : 's'}. After printing, cut the whole
                 stack {o.cropMarks ? 'along the crop marks' : 'where the parts meet'} into {units}{' '}
                 piles. Put the pile from the first position (top left) on top of the next one (left
-                to right, then the next row down), and so on: the sheets are then in order, sheet 1
-                on top.
+                to right, then the next row down), and so on: the {pieces ? 'pieces' : 'sheets'} are
+                then in order, {pieces ? 'piece' : 'sheet'} 1 on top.
                 {!o.cropMarks && ' Turning on crop marks shows exactly where to cut.'}
               </>
             ) : (
               <>
-                Each printed sheet carries <strong>{units} copies</strong> of a folded sheet: cut
-                the stack into {units} piles, and each pile makes one complete copy.
+                Each printed sheet carries <strong>{units} copies</strong> of a{' '}
+                {pieces ? 'piece' : 'folded sheet'}: cut the stack into {units} piles, and each pile
+                makes one complete copy.
               </>
             )}
           </p>
@@ -649,4 +749,16 @@ export function PrintView({
       <SheetPreview bytes={preview} />
     </div>
   );
+}
+
+/** E.g. "3 pieces per strip: 4 panels each, the last 2." */
+function pieceSummary(pieces: Piece[], strips: number) {
+  const first = pieces[0]!;
+  const last = pieces[first.of - 1]!;
+  const per = strips > 1 ? ` per strip (${strips} strips)` : '';
+  const size =
+    last.count === first.count
+      ? `${first.count} panel${first.count === 1 ? '' : 's'} each`
+      : `${first.count} panel${first.count === 1 ? '' : 's'} each, the last ${last.count}`;
+  return `${first.of} pieces${per}: ${size}.`;
 }

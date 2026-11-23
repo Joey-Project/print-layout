@@ -23,6 +23,22 @@ export function accordion(panels: number): Recipe {
   };
 }
 
+/**
+ * Whether `r` is a plain accordion of any length: one row of panels folded back and forth, read
+ * across the front and then across the back (so its panel count can simply be changed).
+ */
+export function isAccordion(r: Recipe): boolean {
+  if (r.reading.mode !== 'sequence' || r.reading.order || r.grid.rows !== 1) return false;
+  const folds = concertinaFolds(r.grid.cols);
+  return (
+    r.folds.length === folds.length &&
+    r.folds.every((f, i) => {
+      const g = folds[i]!;
+      return f.axis === g.axis && f.at === g.at && f.move === g.move && f.to === g.to;
+    })
+  );
+}
+
 const f = (col: number, row: number, rotation: 0 | 180 = 0): PanelFace => ({
   side: 'front',
   col,
