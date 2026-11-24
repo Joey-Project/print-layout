@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { NO_GANG, type Gang, type Piece, type Plan, type Recipe } from '../engine';
 import {
   activeJoin,
@@ -112,10 +112,30 @@ function GuideOverlay({ guides, size }: { guides: SheetGuides; size: { w: number
   const { w, h } = size;
   const kept = guides.pieces.map(({ rect: r }) => `M${r.x} ${r.y}h${r.w}v${r.h}h${-r.w}z`).join('');
   const font = Math.min(w, h) / 32;
+  // Hatched, so what is cut off cannot be mistaken for grey on the page (e.g. the dummy's margin).
+  const hatch = `hatch-${useId().replace(/:/g, '')}`;
+  const step = Math.min(w, h) / 70;
   return (
     <svg className="guides" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+      <defs>
+        <pattern
+          id={hatch}
+          width={step}
+          height={step}
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
+        >
+          <rect className="hatch-bg" width={step} height={step} />
+          <line className="hatch-line" x1={0} y1={0} x2={0} y2={step} />
+        </pattern>
+      </defs>
       <g transform={`matrix(1 0 0 -1 0 ${h})`}>
-        <path className="cut-off" d={`M0 0h${w}v${h}h${-w}z${kept}`} fillRule="evenodd" />
+        <path
+          className="cut-off"
+          d={`M0 0h${w}v${h}h${-w}z${kept}`}
+          fillRule="evenodd"
+          fill={`url(#${hatch})`}
+        />
         {guides.pieces.map(({ rect: r, empty }, i) => (
           <rect
             key={i}

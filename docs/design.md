@@ -179,7 +179,7 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    use their earlier/later buttons, or type the order. _(done)_
 6. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
    **Checking the marks**: the print preview draws each side's marks joined into full cut and fold
-   lines (`sheetGuides`) over the parts the layout keeps, shades what is cut off, labels each part's
+   lines (`sheetGuides`) over the parts the layout keeps, hatches what is cut off, labels each part's
    size and lists where the lines are, in mm from the sheet's left and top. The lines come from the
    marks and the parts from the layout, so a mark off a part's edge or fold shows; tests check that
    every part edge has a cut and every panel line a fold, with no stray marks, across presets,
