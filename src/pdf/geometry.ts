@@ -57,6 +57,8 @@ export const PAGE_SIZES: SheetSize[] = [
   { id: 'half-letter', label: 'Half Letter', w: 139.7, h: 215.9 },
   { id: 'letter', label: 'US Letter', w: 215.9, h: 279.4 },
   { id: 'square-150', label: 'Square 150 mm', w: 150, h: 150 },
+  { id: 'tn-passport', label: "Traveler's Notebook Passport", w: 89, h: 124 },
+  { id: 'tn-regular', label: "Traveler's Notebook Regular", w: 110, h: 210 },
 ];
 
 export type SheetChoice =
@@ -734,6 +736,84 @@ function dedupe(xs: number[]) {
 }
 
 const fmtMm = (pt: number) => Math.round((pt / MM) * 10) / 10;
+
+/** What a printed side is cut and folded into, for checking the marks (see `sheetGuides`). */
+export interface SheetGuides {
+  /** Each part as kept after cutting (its trim, with a glue tab; without any waste). */
+  pieces: { rect: Rect; empty: boolean }[];
+  /** The crop marks (and cut guides) joined up: full cut lines. */
+  cuts: Segment[];
+  /** The fold marks joined up. */
+  folds: Segment[];
+}
+
+/**
+ * Join marks that lie on one line (vertical or horizontal) into one segment spanning them all: the
+ * line a ruler laid on the marks would draw.
+ */
+function joinMarks(marks: readonly Segment[]): Segment[] {
+  // Grouped by position to 1/100 pt; each line keeps the first mark's exact position.
+  const key = (v: number) => Math.round(v * 100);
+  const vertical = new Map<number, { at: number; lo: number; hi: number }>();
+  const horizontal = new Map<number, { at: number; lo: number; hi: number }>();
+  for (const m of marks) {
+    const isVertical = Math.abs(m.x1 - m.x2) < 1e-6;
+    if (!isVertical && Math.abs(m.y1 - m.y2) >= 1e-6) continue;
+    const [map, at, a, b] = isVertical
+      ? [vertical, m.x1, m.y1, m.y2]
+      : [horizontal, m.y1, m.x1, m.x2];
+    const line = map.get(key(at));
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    if (line) {
+      line.lo = Math.min(line.lo, lo);
+      line.hi = Math.max(line.hi, hi);
+    } else map.set(key(at), { at, lo, hi });
+  }
+  return [
+    ...[...vertical.values()].map(({ at, lo, hi }) => ({ x1: at, y1: lo, x2: at, y2: hi })),
+    ...[...horizontal.values()].map(({ at, lo, hi }) => ({ x1: lo, y1: at, x2: hi, y2: at })),
+  ];
+}
+
+/**
+ * The cuts and folds a printed side's marks call for, joined into full lines, and the parts the
+ * layout means to keep. They come from different places (the marks as drawn; the parts' own
+ * rectangles), so drawing both shows at a glance whether the marks land on the parts' edges and
+ * folds.
+ */
+export function sheetGuides(
+  layout: SheetLayout,
+  paper: number,
+  side: 'front' | 'back',
+): SheetGuides {
+  const { width, height, backRotated } = layout;
+  const marks = layout.marks(side);
+  const joins = layout.joins(paper, side);
+  const pieces: SheetGuides['pieces'] = [];
+  layout.units.forEach((row, r) =>
+    row.forEach((front, c) => {
+      const empty = layout.gang.sheetAt(paper, c, r) === null;
+      let rect = side === 'back' ? mirrorRect(front, width, height, backRotated) : front;
+      // A strip's shorter last piece: its empty end is cut off.
+      for (const w of joins.waste) {
+        const overlaps = w.x < rect.x + rect.w - 1e-6 && w.x + w.w > rect.x + 1e-6;
+        const sameRow = w.y < rect.y + rect.h - 1e-6 && w.y + w.h > rect.y + 1e-6;
+        if (!overlaps || !sameRow) continue;
+        rect =
+          w.x <= rect.x + 1e-6
+            ? { ...rect, x: w.x + w.w, w: rect.x + rect.w - (w.x + w.w) }
+            : { ...rect, w: w.x - rect.x };
+      }
+      pieces.push({ rect, empty });
+    }),
+  );
+  return {
+    pieces,
+    cuts: joinMarks([...marks.crop, ...joins.guides]),
+    folds: joinMarks(marks.fold),
+  };
+}
 
 /** A source PDF page: its /Rotate and trim box in unrotated user space. */
 export interface SourcePage {

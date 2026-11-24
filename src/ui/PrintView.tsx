@@ -8,8 +8,10 @@ import {
   PAGE_SIZES,
   PRINT_PRESETS,
   SHEET_SIZES,
+  sheetGuides,
   type PrintOptions,
   type PrintPreset,
+  type SheetGuides,
 } from '../pdf/geometry';
 import { physicalSize, type ImposedOptions } from '../pdf/imposed';
 import type { PageEntry } from '../pdf/pageOrder';
@@ -46,11 +48,20 @@ export function dummySize(id: string) {
 }
 
 /** Rendered preview of one output sheet (front and back), from the real exported PDF. */
-function SheetPreview({ bytes }: { bytes: Uint8Array | null }) {
-  const holder = useRef<HTMLDivElement>(null);
+function SheetPreview({
+  bytes,
+  guides,
+  size,
+}: {
+  bytes: Uint8Array | null;
+  /** Cut and fold lines (and the parts kept) to draw over the front and back, or null. */
+  guides: { front: SheetGuides; back: SheetGuides } | null;
+  /** The sheet, in points. */
+  size: { w: number; h: number };
+}) {
+  const [pages, setPages] = useState<HTMLCanvasElement[]>([]);
   useEffect(() => {
-    const el = holder.current;
-    if (!el || !bytes) return;
+    if (!bytes) return;
     let cancelled = false;
     void (async () => {
       const { openPdfJs, renderPage } = await import('../pdf/render');
@@ -58,23 +69,110 @@ function SheetPreview({ bytes }: { bytes: Uint8Array | null }) {
       const canvases: HTMLCanvasElement[] = [];
       for (let i = 0; i < doc.numPages; i++) canvases.push(await renderPage(doc, i, 900));
       void doc.loadingTask.destroy();
-      if (cancelled) return;
-      el.replaceChildren(
-        ...canvases.map((c, i) => {
-          const fig = document.createElement('figure');
-          const cap = document.createElement('figcaption');
-          cap.textContent = canvases.length > 1 ? (i === 0 ? 'Front' : 'Back') : 'Front';
-          c.className = 'sheet-preview';
-          fig.append(c, cap);
-          return fig;
-        }),
-      );
+      if (!cancelled) setPages(canvases);
     })();
     return () => {
       cancelled = true;
     };
   }, [bytes]);
-  return <div className="previews" ref={holder} />;
+  return (
+    <div className="previews">
+      {pages.map((c, i) => {
+        const side = i === 0 ? 'front' : 'back';
+        return (
+          <figure key={i}>
+            <div className="sheet-frame">
+              <CanvasSlot canvas={c} />
+              {guides && <GuideOverlay guides={guides[side]} size={size} />}
+            </div>
+            <figcaption>{pages.length > 1 ? (i === 0 ? 'Front' : 'Back') : 'Front'}</figcaption>
+          </figure>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Puts an already-drawn canvas in the page. */
+function CanvasSlot({ canvas }: { canvas: HTMLCanvasElement }) {
+  const holder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    canvas.className = 'sheet-preview';
+    holder.current?.replaceChildren(canvas);
+  }, [canvas]);
+  return <div ref={holder} />;
+}
+
+/**
+ * The marks joined into full cut lines (solid) and fold lines (dashed), over the parts the layout
+ * keeps (clear, with their size) and what is cut off (shaded): a mark off a part's edge or fold
+ * shows as a line beside it. PDF coordinates (y up), so the group is flipped.
+ */
+function GuideOverlay({ guides, size }: { guides: SheetGuides; size: { w: number; h: number } }) {
+  const { w, h } = size;
+  const kept = guides.pieces.map(({ rect: r }) => `M${r.x} ${r.y}h${r.w}v${r.h}h${-r.w}z`).join('');
+  const font = Math.min(w, h) / 32;
+  return (
+    <svg className="guides" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+      <g transform={`matrix(1 0 0 -1 0 ${h})`}>
+        <path className="cut-off" d={`M0 0h${w}v${h}h${-w}z${kept}`} fillRule="evenodd" />
+        {guides.pieces.map(({ rect: r, empty }, i) => (
+          <rect
+            key={i}
+            className={`kept${empty ? ' empty' : ''}`}
+            x={r.x}
+            y={r.y}
+            width={r.w}
+            height={r.h}
+          />
+        ))}
+        {guides.cuts.map((l, i) => (
+          <line key={`c${i}`} className="cut" x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} />
+        ))}
+        {guides.folds.map((l, i) => (
+          <line
+            key={`f${i}`}
+            className="fold"
+            x1={l.x1}
+            y1={l.y1}
+            x2={l.x2}
+            y2={l.y2}
+            strokeDasharray={`${font / 2} ${font / 3}`}
+          />
+        ))}
+      </g>
+      {guides.pieces.map(({ rect: r, empty }, i) => (
+        // Near the part's bottom edge, clear of the fold through its middle.
+        <text
+          key={i}
+          className="size"
+          x={r.x + r.w / 2}
+          y={h - r.y - Math.min(r.h / 2, font * 1.1)}
+          fontSize={font}
+        >
+          {empty ? 'empty' : `${mm(r.w)} × ${mm(r.h)} mm`}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+/** Where a side's lines are, measured from the sheet's left and top edges (as a ruler would). */
+function guideText(g: SheetGuides, size: { w: number; h: number }) {
+  const sorted = (xs: number[]) => [...new Set(xs.map(mm))].sort((a, b) => a - b).join(', ');
+  const vx = (ls: SheetGuides['cuts']) => ls.filter((l) => l.x1 === l.x2).map((l) => l.x1);
+  const hy = (ls: SheetGuides['cuts']) => ls.filter((l) => l.y1 === l.y2).map((l) => size.h - l.y1);
+  const parts: string[] = [];
+  const say = (what: string, xs: number[], ys: number[]) => {
+    const bits = [
+      xs.length ? `${sorted(xs)} mm from the left` : '',
+      ys.length ? `${sorted(ys)} mm from the top` : '',
+    ].filter(Boolean);
+    if (bits.length) parts.push(`${what} at ${bits.join('; ')}`);
+  };
+  say('cuts', vx(g.cuts), hy(g.cuts));
+  say('folds', vx(g.folds), hy(g.folds));
+  return parts.join(' · ');
 }
 
 export function PrintView({
@@ -102,6 +200,8 @@ export function PrintView({
   const [error, setError] = useState<string | null>(null);
   const [previewSheet, setPreviewSheet] = useState(0);
   const [preview, setPreview] = useState<Uint8Array | null>(null);
+  /** Draw the cut and fold lines (the marks joined up) over the preview. */
+  const [showGuides, setShowGuides] = useState(true);
 
   const source = pdf?.mode === 'reading' ? pdf : null;
   /** Finished page size for these options: a sheet divided into sections sizes the dummy's. */
@@ -181,6 +281,14 @@ export function PrintView({
 
   // A live preview of one sheet, built with the real exporter (debounced).
   const sheetShown = Math.min(previewSheet, sheetCount - 1);
+  const guides = useMemo(
+    () => ({
+      front: sheetGuides(layout, sheetShown, 'front'),
+      back: sheetGuides(layout, sheetShown, 'back'),
+    }),
+    [layout, sheetShown],
+  );
+  const sheetSize = { w: layout.width, h: layout.height };
   useEffect(() => {
     if (pdf?.mode === 'imposed') return;
     let cancelled = false;
@@ -751,7 +859,32 @@ export function PrintView({
         )}
       </div>
       {error && <p className="error">{error}</p>}
-      <SheetPreview bytes={preview} />
+      <div className="guide-bar">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={showGuides}
+            onChange={(e) => setShowGuides(e.target.checked)}
+          />
+          Show cut and fold lines
+        </label>
+        {/* Always laid out (only hidden), so the sheets below never move when this is toggled. */}
+        <span className="muted small" style={{ visibility: showGuides ? 'visible' : 'hidden' }}>
+          <span className="key cut" /> cut <span className="key fold" /> fold{' '}
+          <span className="key off" /> cut off · the marks joined up, over the parts kept
+        </span>
+      </div>
+      {/* Where the lines are: useful with or without the overlay, and it keeps the layout still. */}
+      <p className="muted small guide-text">
+        Front: {guideText(guides.front, sheetSize) || 'no marks (turn on crop and fold marks)'}
+        {hasBacks && guideText(guides.back, sheetSize) !== guideText(guides.front, sheetSize)
+          ? ` — Back: ${guideText(guides.back, sheetSize)}`
+          : hasBacks
+            ? ' (the same on the back)'
+            : ''}
+        . The sheet&apos;s centre is {mm(layout.width / 2)} mm from the left.
+      </p>
+      <SheetPreview bytes={preview} guides={showGuides ? guides : null} size={sheetSize} />
     </div>
   );
 }

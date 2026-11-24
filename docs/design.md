@@ -178,6 +178,13 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    sheet cards on the Sheets tab (the reading-order strip highlights the dragged sheet's pages),
    use their earlier/later buttons, or type the order. _(done)_
 6. **Print extras** — crop/fold marks, bleed handling, PDF/X output intent, n-up copies, creep.
+   **Checking the marks**: the print preview draws each side's marks joined into full cut and fold
+   lines (`sheetGuides`) over the parts the layout keeps, shades what is cut off, labels each part's
+   size and lists where the lines are, in mm from the sheet's left and top. The lines come from the
+   marks and the parts from the layout, so a mark off a part's edge or fold shows; tests check that
+   every part edge has a cut and every panel line a fold, with no stray marks, across presets,
+   gangs, flips, bleed and sections. Page sizes include Traveler's Notebook Passport (89 × 124 mm;
+   two spreads fit A4 portrait at 100 %, folds on the sheet's centre line) and Regular.
    **Long strips in pieces** (`src/engine/join.ts`, `PrintOptions.join`): an accordion can have any
    number of panels (the Panels field rebuilds `accordion(n)`); a strip longer than the sheet
    prints in pieces cut at its fold lines, each like a sheet of its own (so several fit per sheet),
