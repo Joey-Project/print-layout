@@ -8,6 +8,8 @@ import {
   paperPlan,
   pagesPerSheet,
   ImpositionError,
+  importRecipes,
+  recipeFileText,
   recipeProblems,
   type Padding,
   type Plan,
@@ -39,9 +41,24 @@ import {
 } from './debugReport';
 import { PlanView, type SheetOrderControls } from './SheetView';
 import { PageOrderStrip } from './PageOrderStrip';
+import { FoldEditor, newRecipe } from './FoldEditor';
 import { bookLength, type PageEntry } from '../pdf/pageOrder';
 
 const pretty = (r: Recipe) => JSON.stringify(r, null, 2);
+
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** A file-name-safe stem from a recipe id. */
+const fileStem = (id: string) => id.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'recipe';
 
 type Draft = { ok: true; recipe: Recipe } | { ok: false; problems: string[] };
 
@@ -83,8 +100,19 @@ export function App() {
   const [restore, setRestore] = useState<ViewerState | null>(null);
   const clearRestore = useCallback(() => setRestore(null), []);
   const fileInput = useRef<HTMLInputElement>(null);
+  const recipeInput = useRef<HTMLInputElement>(null);
+  /** What the last recipe import did. */
+  const [importNote, setImportNote] = useState<{ text: string; problems: string[] } | null>(null);
 
   const draft = useMemo(() => parseDraft(text), [text]);
+  // The draft as plain JSON, for the fold editor (it works on unfinished programs too).
+  const draftValue = useMemo((): unknown => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }, [text]);
   const active = draft.ok ? draft.recipe : (reportRecipe ?? selected);
   const edited = text !== pretty(selected);
 
@@ -140,6 +168,46 @@ export function App() {
     setSelectedId(recipe.id);
     setReportRecipe(null);
     setText(pretty(recipe));
+  };
+
+  const editRecipe = (r: Recipe) => {
+    setReportRecipe(null);
+    setText(pretty(r));
+  };
+
+  const importFiles = async (files: FileList) => {
+    let list = custom;
+    const lines: string[] = [];
+    const problems: string[] = [];
+    let first: string | null = null;
+    for (const file of Array.from(files)) {
+      let json: unknown;
+      try {
+        json = JSON.parse(await file.text());
+      } catch {
+        problems.push(`${file.name}: not a JSON file.`);
+        continue;
+      }
+      const r = importRecipes(json, [...builtinRecipes, ...list]);
+      list = [...list, ...r.added];
+      first ??= r.added[0]?.id ?? null;
+      if (r.added.length) {
+        lines.push(`${file.name}: added ${r.added.map((x) => `“${x.name}”`).join(', ')}.`);
+      }
+      for (const { from, to } of r.renamed) {
+        lines.push(`“${from}” was already taken by another recipe, so it is now “${to}”.`);
+      }
+      if (r.same.length) lines.push(`${file.name}: ${r.same.length} already here, unchanged.`);
+      problems.push(...r.problems.map((p) => `${file.name}: ${p}`));
+    }
+    logEvent('importRecipes', { files: files.length, added: list.length - custom.length });
+    if (list !== custom) persist(list);
+    if (first) {
+      const r = list.find((x) => x.id === first)!;
+      setSelectedId(r.id);
+      editRecipe(r);
+    }
+    setImportNote({ text: lines.join(' ') || 'Nothing to add.', problems });
   };
 
   const deleteSelected = () => {
@@ -471,7 +539,25 @@ export function App() {
         />
 
         <details open className="editor">
-          <summary>Recipe JSON {edited && <span className="badge">edited</span>}</summary>
+          <summary>Fold editor</summary>
+          <FoldEditor
+            value={draftValue}
+            onChange={(r) => {
+              logEvent('foldEditor', { grid: r.grid, folds: r.folds.length });
+              editRecipe(r);
+            }}
+            onNew={() => {
+              logEvent('newRecipe', {});
+              editRecipe(newRecipe(new Set(all.map((r) => r.id))));
+            }}
+          />
+        </details>
+
+        <details open className="editor">
+          <summary>
+            Recipe JSON {edited && <span className="badge">edited</span>}
+            {!draft.ok && <span className="badge">not ready</span>}
+          </summary>
           <p className="muted small">
             Edit to design your own binding; the preview updates live. Folds use panel units on the
             current folded packet — see <code>docs/design.md</code>.
@@ -504,6 +590,54 @@ export function App() {
               </button>
             )}
           </div>
+          <div className="buttons">
+            <button
+              disabled={!draft.ok}
+              title="Save this recipe as a file to share or keep"
+              onClick={() =>
+                draft.ok &&
+                downloadText(
+                  `${fileStem(draft.recipe.id)}.recipe.json`,
+                  recipeFileText([draft.recipe]),
+                )
+              }
+            >
+              Export
+            </button>
+            {custom.length > 0 && (
+              <button
+                title="All of my recipes in one file"
+                onClick={() => downloadText('print-layout-recipes.json', recipeFileText(custom))}
+              >
+                Export my recipes
+              </button>
+            )}
+            <button onClick={() => recipeInput.current?.click()}>Import…</button>
+            <input
+              ref={recipeInput}
+              type="file"
+              accept=".json,application/json"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files?.length) void importFiles(files);
+                e.target.value = '';
+              }}
+            />
+          </div>
+          {importNote && (
+            <div className="import-note small" role="status">
+              <p>{importNote.text}</p>
+              {importNote.problems.length > 0 && (
+                <ul className="problems">
+                  {importNote.problems.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </details>
       </aside>
 

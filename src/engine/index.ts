@@ -9,3 +9,7 @@ export { backUnitColumn, gangPlan, NO_GANG, paperPlan } from './gang';
 export type { CellRect, Gang, GangPlan, PaperLayout, PaperPlan, Sections, UnitPlace } from './gang';
 export { piecePanels, pieceName, splitStrip } from './join';
 export type { Piece, SplitPlan } from './join';
+export { foldLabel, foldLines, foldProgress, movingPart, stackDepths } from './foldEditor';
+export type { FoldLine, FoldProgress, FoldStage } from './foldEditor';
+export { importRecipes, RECIPE_FILE_KIND, recipeFileText } from './recipeFile';
+export type { ImportResult, RecipeFile } from './recipeFile';

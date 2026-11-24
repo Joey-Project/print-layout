@@ -2,7 +2,7 @@ import { builtinRecipes, recipeProblems, type Recipe } from '../engine';
 
 const KEY = 'print-layout.custom-recipes.v1';
 
-/** Custom recipes live in this browser's localStorage for now (export/import comes later). */
+/** Custom recipes live in this browser's localStorage; recipe files move them elsewhere. */
 export function loadCustomRecipes(): Recipe[] {
   try {
     const raw = localStorage.getItem(KEY);

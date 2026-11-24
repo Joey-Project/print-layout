@@ -717,6 +717,114 @@ label.inline {
 .page-order {
   margin-bottom: 16px;
 }
+
+/* Fold editor */
+.fold-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.fold-editor .packet {
+  width: 100%;
+  max-height: 260px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.packet .ghost {
+  fill: none;
+  stroke: var(--line);
+  stroke-dasharray: 4 3;
+}
+.packet .cell {
+  fill: var(--accent-soft);
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+.packet .depth {
+  font-size: 13px;
+  fill: var(--text);
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.packet .moving {
+  fill: var(--accent);
+  fill-opacity: 0.3;
+  pointer-events: none;
+}
+.packet .fold-line {
+  cursor: pointer;
+}
+.packet .fold-line .hit {
+  stroke: transparent;
+  stroke-width: 14;
+}
+.packet .fold-line .mark {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+.packet .fold-line:hover .mark,
+.packet .fold-line.on .mark {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: none;
+}
+.fold-lines,
+.fold-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fold-lines button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.fold-choices button {
+  border-color: var(--accent);
+}
+.fold-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fold-steps li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.fold-steps li.broken {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+.fold-steps .step-buttons {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.fold-steps button {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+.error-text {
+  color: var(--danger);
+}
+.ok-text {
+  color: var(--text);
+  font-weight: 600;
+}
+.import-note p {
+  margin: 6px 0;
+}
+
 /* A blank page inserted in the page order: plain paper, dashed so it reads as added. */
 .page-order-pages .art.blank-page {
   display: flex;

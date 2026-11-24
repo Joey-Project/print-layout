@@ -193,7 +193,16 @@ an existing imposed PDF. The fold program additionally drives the 3D animation.
    end is labelled and cut off. "Fit the sheet" picks the longest pieces that fit, then as many per
    sheet as fit. The 3D model starts from the whole strip. _(next: proofing pieces, gluing in
    3D)_
-7. **Visual fold editor**, recipe import/export, InDesign add-on, packaging.
+7. **Visual fold editor**, recipe import/export, InDesign add-on, packaging. The fold editor
+   (`src/ui/FoldEditor.tsx` over the pure `src/engine/foldEditor.ts`) edits the recipe draft:
+   set the grid, pick a fold line on the packet as it folds (the picture shows the flat sheet's
+   outline and the layers on each panel), then which part swings over or under. Steps can be
+   swapped over ↔ under in place or removed with those after them; it says when the packet is one
+   panel, or which fold no longer fits. Reading (bound with spine and sections, or unfolded) is set
+   there too; a custom sequence order stays in the JSON. Recipe files (`src/engine/recipeFile.ts`)
+   wrap a list of recipes; importing takes one of ours, a bare recipe or a list, validates each,
+   skips identical ones and gives a taken id a fresh one, so nothing is replaced. _(fold editor
+   and import/export done; next: InDesign add-on, packaging)_
 
 ## Bug reports
 
