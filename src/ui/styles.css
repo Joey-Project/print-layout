@@ -745,8 +745,13 @@ label.inline {
   height: 100%;
   pointer-events: none;
 }
-.guides .cut-off {
-  fill: rgb(60 55 50 / 0.28);
+.guides .hatch-bg {
+  fill: rgb(60 55 50 / 0.12);
+}
+.guides .hatch-line {
+  stroke: rgb(60 55 50 / 0.55);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
 }
 .guides .kept {
   fill: none;
@@ -798,7 +803,11 @@ label.inline {
 }
 .guide-bar .key.off {
   height: 10px;
-  background: rgb(60 55 50 / 0.28);
+  background: repeating-linear-gradient(
+    45deg,
+    rgb(60 55 50 / 0.55) 0 1.5px,
+    rgb(60 55 50 / 0.12) 1.5px 4px
+  );
 }
 .guide-text {
   margin: 4px 0 8px;

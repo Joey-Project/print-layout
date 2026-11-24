@@ -185,11 +185,15 @@ export async function placeholderPdf(pageCount: number, size: { w: number; h: nu
   for (let n = 1; n <= pageCount; n++) {
     const page = doc.addPage([size.w, size.h]);
     const inset = Math.min(size.w, size.h) * 0.06;
+    // The whole page is tinted outside the frame, so its real edge shows (pages of a spread meet
+    // at the fold); the frame is a safe area, not the page.
+    page.drawRectangle({ x: 0, y: 0, width: size.w, height: size.h, color: grayscale(0.88) });
     page.drawRectangle({
       x: inset,
       y: inset,
       width: size.w - 2 * inset,
       height: size.h - 2 * inset,
+      color: grayscale(1),
       borderColor: grayscale(0.6),
       borderWidth: 1,
     });
